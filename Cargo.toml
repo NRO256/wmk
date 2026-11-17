@@ -1,0 +1,22 @@
+[package]
+name = "wmk"
+version = "0.1.1"
+authors = ["NRO / Antigravity"]
+edition = "2024"
+description = "Windows Maintenance Kit (WMK) - Portable Win32 GUI for System Repair and Maintenance"
+license = "MIT"
+
+[lib]
+name = "wmk_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "WMK"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
