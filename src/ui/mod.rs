@@ -1,100 +1,42 @@
 pub mod dialogs;
+pub mod layout;
 pub mod state;
 
 use crate::domain::commands::{MaintenanceAction, build_command_steps};
 use crate::domain::source_detect::detect_portable_image_in_dir;
-use crate::platform::drive::list_available_drives;
 use crate::platform::io::{get_exe_directory, save_text_utf8};
 use crate::platform::process::{WM_APP_WORKER_EVENT, WorkerEvent, spawn_command_sequence};
 use crate::platform::win32::{
-    BN_CLICKED, BS_PUSHBUTTON, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBS_DROPDOWNLIST,
-    CBS_HASSTRINGS, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, CW_USEDEFAULT,
-    CreateFontW, CreateWindowExW, DEFAULT_CHARSET, DEFAULT_PITCH, DLGC_WANTALLKEYS, DLGC_WANTTAB,
-    DWORD_PTR, DefSubclassProc, DefWindowProcW, DestroyWindow, DispatchMessageW, EM_GETSEL,
-    EM_REPLACESEL, EM_SETLIMITTEXT, EM_SETSEL, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT,
-    ES_MULTILINE, ES_READONLY, EnableWindow, FALSE, FIXED_PITCH, FW_NORMAL, GetClientRect,
-    GetDlgItem, GetDpiForWindow, GetFocus, GetKeyState, GetMessageW, GetModuleHandleW, GetParent,
-    GetWindowTextLengthW, HBRUSH, HFONT, HINSTANCE, HMENU, HWND, ICC_STANDARD_CLASSES, IDC_ARROW,
-    IDI_APPLICATION, INITCOMMONCONTROLSEX, InitCommonControlsEx, IsDialogMessageW, IsWindowEnabled,
-    LPARAM, LRESULT, LoadCursorW, LoadIconW, MSG, MoveWindow, OUT_DEFAULT_PRECIS, PostQuitMessage,
-    RECT, RegisterClassExW, RemoveWindowSubclass, SW_SHOW, SendMessageW, SetFocus,
-    SetWindowSubclass, ShowWindow, TRUE, TranslateMessage, UINT, UINT_PTR, UpdateWindow,
-    VK_CONTROL, VK_ESCAPE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
-    WM_GETDLGCODE, WM_KEYDOWN, WM_NCDESTROY, WM_SETFONT, WM_SIZE, WNDCLASSEXW, WPARAM, WS_BORDER,
-    WS_CHILD, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL, get_window_text, make_int_resource_w, set_window_text, with_wide,
+    AdjustWindowRectExForDpi, BN_CLICKED, CB_GETCURSEL, COLOR_BTNFACE, CW_USEDEFAULT,
+    CreateWindowExW, DLGC_WANTALLKEYS, DLGC_WANTTAB, DWORD_PTR, DefSubclassProc, DefWindowProcW,
+    DeleteObject, DestroyWindow, DispatchMessageW, EM_GETFIRSTVISIBLELINE, EM_GETSEL,
+    EM_LINEFROMCHAR, EM_LINEINDEX, EM_LINESCROLL, EM_REPLACESEL, EM_SETSEL, EnableWindow, FALSE,
+    GetDpiForWindow, GetFocus, GetKeyState, GetMessageW, GetModuleHandleW, GetParent,
+    GetWindowTextLengthW, HBRUSH, HWND, ICC_STANDARD_CLASSES, IDC_ARROW, IDI_APPLICATION,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, InvalidateRect, IsDialogMessageW, IsWindowEnabled,
+    LPARAM, LRESULT, LoadCursorW, LoadIconW, MINMAXINFO, MSG, MoveWindow, PostQuitMessage, RECT,
+    RegisterClassExW, RemoveWindowSubclass, SW_SHOW, SendMessageW, SetFocus, ShowWindow, TRUE,
+    TranslateMessage, UINT, UINT_PTR, UpdateWindow, VK_CONTROL, VK_ESCAPE, WM_CHAR, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_GETDLGCODE, WM_GETMINMAXINFO, WM_KEYDOWN,
+    WM_NCDESTROY, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WPARAM, WS_OVERLAPPEDWINDOW, get_window_text,
+    make_int_resource_w, set_window_text, with_wide,
 };
 use crate::ui::dialogs::{
     browse_folder, confirm_yes_no, open_image_file, save_log_file, show_error, show_info,
 };
+use crate::ui::layout::{
+    ACTION_BUTTON_IDS, ID_BTN_CANCEL, ID_BTN_CHKDSK, ID_BTN_DISM_BROWSE_DIR,
+    ID_BTN_DISM_BROWSE_IMG, ID_BTN_DISM_ONLINE, ID_BTN_DISM_SOURCE, ID_BTN_LOG_CLEAR,
+    ID_BTN_LOG_SAVE, ID_BTN_NET_ALL, ID_BTN_NTP_RESYNC, ID_BTN_SFC, ID_BTN_SYSINFO,
+    ID_CMB_CHKDSK_DRIVE, ID_CMB_DISM_INDEX, ID_EDIT_DISM_SOURCE, ID_EDIT_LOG, ID_LBL_STATUS,
+    MIN_CLIENT_HEIGHT, MIN_CLIENT_WIDTH, apply_fonts, create_controls, create_fonts_for_dpi, ctrl,
+    layout_controls, scale,
+};
 use crate::ui::state::AppState;
 use std::cell::RefCell;
+use std::sync::atomic::Ordering;
 
-// 共通・上部バー
-const ID_LBL_STATUS: usize = 101;
-const ID_BTN_CANCEL: usize = 102;
-
-// メンテナンス操作
-const ID_BTN_DISM_ONLINE: usize = 201;
-const ID_BTN_SFC: usize = 202;
-const ID_BTN_NET_ALL: usize = 203;
-const ID_BTN_NTP_RESYNC: usize = 204;
-const ID_BTN_SYSINFO: usize = 205;
-
-const ID_LBL_CHKDSK_DRIVE: usize = 210;
-const ID_CMB_CHKDSK_DRIVE: usize = 211;
-const ID_BTN_CHKDSK: usize = 212;
-
-const ID_LBL_DISM_SOURCE: usize = 220;
-const ID_EDIT_DISM_SOURCE: usize = 221;
-const ID_BTN_DISM_BROWSE_DIR: usize = 222;
-const ID_BTN_DISM_BROWSE_IMG: usize = 223;
-const ID_LBL_DISM_INDEX: usize = 224;
-const ID_CMB_DISM_INDEX: usize = 225;
-const ID_BTN_DISM_SOURCE: usize = 226;
-
-// ログ領域
-const ID_LBL_LOG: usize = 301;
-const ID_BTN_LOG_CLEAR: usize = 302;
-const ID_BTN_LOG_SAVE: usize = 303;
-const ID_EDIT_LOG: usize = 304;
-
-const LOG_SUBCLASS_ID: UINT_PTR = 1;
-
-const ACTION_BUTTON_IDS: &[usize] = &[
-    ID_BTN_DISM_ONLINE,
-    ID_BTN_SFC,
-    ID_BTN_NET_ALL,
-    ID_BTN_NTP_RESYNC,
-    ID_BTN_SYSINFO,
-    ID_BTN_CHKDSK,
-    ID_BTN_DISM_BROWSE_DIR,
-    ID_BTN_DISM_BROWSE_IMG,
-    ID_BTN_DISM_SOURCE,
-];
-
-const UI_FONT_IDS: &[usize] = &[
-    ID_LBL_STATUS,
-    ID_BTN_CANCEL,
-    ID_BTN_DISM_ONLINE,
-    ID_BTN_SFC,
-    ID_BTN_NET_ALL,
-    ID_BTN_NTP_RESYNC,
-    ID_BTN_SYSINFO,
-    ID_LBL_CHKDSK_DRIVE,
-    ID_CMB_CHKDSK_DRIVE,
-    ID_BTN_CHKDSK,
-    ID_LBL_DISM_SOURCE,
-    ID_EDIT_DISM_SOURCE,
-    ID_BTN_DISM_BROWSE_DIR,
-    ID_BTN_DISM_BROWSE_IMG,
-    ID_LBL_DISM_INDEX,
-    ID_CMB_DISM_INDEX,
-    ID_BTN_DISM_SOURCE,
-    ID_LBL_LOG,
-    ID_BTN_LOG_CLEAR,
-    ID_BTN_LOG_SAVE,
-];
+const MAX_LOG_EDIT_CHARS: usize = 512 * 1024;
 
 thread_local! {
     static APP_STATE: RefCell<AppState> = RefCell::new(AppState::new());
@@ -108,288 +50,7 @@ fn with_state_mut<R>(f: impl FnOnce(&mut AppState) -> R) -> Option<R> {
     APP_STATE.with(|st| st.try_borrow_mut().ok().map(|mut s| f(&mut s)))
 }
 
-fn ctrl(hwnd: HWND, id: usize) -> HWND {
-    unsafe { GetDlgItem(hwnd, id as i32) }
-}
-
-fn scale(px: i32, dpi: u32) -> i32 {
-    (px * (dpi as i32) + 48) / 96
-}
-
-fn create_child(
-    parent: HWND,
-    hinst: HINSTANCE,
-    class_name: &str,
-    text: &str,
-    style: u32,
-    ex_style: u32,
-    id: usize,
-) -> HWND {
-    with_wide(class_name, |cls| {
-        with_wide(text, |txt| unsafe {
-            CreateWindowExW(
-                ex_style,
-                cls,
-                txt,
-                style | WS_CHILD | WS_VISIBLE,
-                0,
-                0,
-                100,
-                24,
-                parent,
-                id as HMENU,
-                hinst,
-                std::ptr::null(),
-            )
-        })
-    })
-}
-
-fn create_fonts_for_dpi(dpi: u32) -> (HFONT, HFONT) {
-    let height = -scale(14, dpi);
-    with_wide("Yu Gothic UI", |ui_face| {
-        with_wide("Consolas", |mono_face| unsafe {
-            let h_ui = CreateFontW(
-                height,
-                0,
-                0,
-                0,
-                FW_NORMAL,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                DEFAULT_PITCH,
-                ui_face,
-            );
-            let h_mono = CreateFontW(
-                height,
-                0,
-                0,
-                0,
-                FW_NORMAL,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                FIXED_PITCH,
-                mono_face,
-            );
-            (h_ui, h_mono)
-        })
-    })
-}
-
-fn apply_fonts(hwnd: HWND, hfont_ui: HFONT, hfont_mono: HFONT) {
-    unsafe {
-        for &id in UI_FONT_IDS {
-            let h = ctrl(hwnd, id);
-            if !h.is_null() {
-                SendMessageW(h, WM_SETFONT, hfont_ui as WPARAM, TRUE as LPARAM);
-            }
-        }
-        let h_log = ctrl(hwnd, ID_EDIT_LOG);
-        if !h_log.is_null() {
-            SendMessageW(h_log, WM_SETFONT, hfont_mono as WPARAM, TRUE as LPARAM);
-        }
-    }
-}
-
-fn move_ctrl(parent: HWND, id: usize, x: i32, y: i32, w: i32, h: i32) {
-    let ch = ctrl(parent, id);
-    if !ch.is_null() {
-        unsafe {
-            MoveWindow(ch, x, y, w, h, TRUE);
-        }
-    }
-}
-
-fn layout_controls(hwnd: HWND, dpi: u32) {
-    let mut rc = RECT::default();
-    unsafe {
-        GetClientRect(hwnd, &raw mut rc);
-    }
-    let w = (rc.right - rc.left).max(scale(700, dpi));
-    let h = (rc.bottom - rc.top).max(scale(520, dpi));
-
-    let pad = scale(12, dpi);
-    let gap = scale(8, dpi);
-    let row_h = scale(30, dpi);
-    let lbl_h = scale(20, dpi);
-    let inner_w = w - pad * 2;
-    let mut y = pad;
-
-    // 1. 状態表示 + 実行中断
-    let cancel_w = scale(140, dpi);
-    let status_w = inner_w - cancel_w - gap;
-    move_ctrl(hwnd, ID_LBL_STATUS, pad, y + scale(5, dpi), status_w, lbl_h);
-    move_ctrl(
-        hwnd,
-        ID_BTN_CANCEL,
-        pad + status_w + gap,
-        y,
-        cancel_w,
-        row_h,
-    );
-    y += row_h + gap + scale(4, dpi);
-
-    // 2. 基本修復 (2列)
-    let half_w = (inner_w - gap) / 2;
-    move_ctrl(hwnd, ID_BTN_DISM_ONLINE, pad, y, half_w, row_h);
-    move_ctrl(
-        hwnd,
-        ID_BTN_SFC,
-        pad + half_w + gap,
-        y,
-        inner_w - half_w - gap,
-        row_h,
-    );
-    y += row_h + gap;
-
-    // 3. ネットワーク・時刻・システム情報 (3列)
-    let third_w = (inner_w - gap * 2) / 3;
-    move_ctrl(hwnd, ID_BTN_NET_ALL, pad, y, third_w, row_h);
-    move_ctrl(
-        hwnd,
-        ID_BTN_NTP_RESYNC,
-        pad + third_w + gap,
-        y,
-        third_w,
-        row_h,
-    );
-    move_ctrl(
-        hwnd,
-        ID_BTN_SYSINFO,
-        pad + (third_w + gap) * 2,
-        y,
-        inner_w - (third_w + gap) * 2,
-        row_h,
-    );
-    y += row_h + gap + scale(4, dpi);
-
-    // 4. CHKDSK
-    let drv_lbl_w = scale(120, dpi);
-    let drv_cmb_w = scale(80, dpi);
-    let chkdsk_btn_w = inner_w - drv_lbl_w - drv_cmb_w - gap * 2;
-    move_ctrl(
-        hwnd,
-        ID_LBL_CHKDSK_DRIVE,
-        pad,
-        y + scale(5, dpi),
-        drv_lbl_w,
-        lbl_h,
-    );
-    move_ctrl(
-        hwnd,
-        ID_CMB_CHKDSK_DRIVE,
-        pad + drv_lbl_w + gap,
-        y + scale(2, dpi),
-        drv_cmb_w,
-        scale(180, dpi),
-    );
-    move_ctrl(
-        hwnd,
-        ID_BTN_CHKDSK,
-        pad + drv_lbl_w + drv_cmb_w + gap * 2,
-        y,
-        chkdsk_btn_w,
-        row_h,
-    );
-    y += row_h + gap + scale(4, dpi);
-
-    // 5. DISM ソース指定修復
-    move_ctrl(hwnd, ID_LBL_DISM_SOURCE, pad, y, inner_w, lbl_h);
-    y += lbl_h + scale(2, dpi);
-
-    let btn_sm = scale(100, dpi);
-    let edit_src_w = inner_w - (btn_sm * 2 + gap * 2);
-    move_ctrl(hwnd, ID_EDIT_DISM_SOURCE, pad, y, edit_src_w, row_h);
-    move_ctrl(
-        hwnd,
-        ID_BTN_DISM_BROWSE_DIR,
-        pad + edit_src_w + gap,
-        y,
-        btn_sm,
-        row_h,
-    );
-    move_ctrl(
-        hwnd,
-        ID_BTN_DISM_BROWSE_IMG,
-        pad + edit_src_w + gap * 2 + btn_sm,
-        y,
-        btn_sm,
-        row_h,
-    );
-    y += row_h + gap;
-
-    let idx_lbl_w = scale(85, dpi);
-    let idx_cmb_w = scale(60, dpi);
-    let run_src_w = inner_w - idx_lbl_w - idx_cmb_w - gap * 2;
-    move_ctrl(
-        hwnd,
-        ID_LBL_DISM_INDEX,
-        pad,
-        y + scale(5, dpi),
-        idx_lbl_w,
-        lbl_h,
-    );
-    move_ctrl(
-        hwnd,
-        ID_CMB_DISM_INDEX,
-        pad + idx_lbl_w + gap,
-        y + scale(2, dpi),
-        idx_cmb_w,
-        scale(180, dpi),
-    );
-    move_ctrl(
-        hwnd,
-        ID_BTN_DISM_SOURCE,
-        pad + idx_lbl_w + idx_cmb_w + gap * 2,
-        y,
-        run_src_w,
-        row_h,
-    );
-    y += row_h + gap + scale(6, dpi);
-
-    // 6. 下部ログ領域
-    let log_btn_w = scale(120, dpi);
-    move_ctrl(
-        hwnd,
-        ID_LBL_LOG,
-        pad,
-        y + scale(5, dpi),
-        scale(200, dpi),
-        lbl_h,
-    );
-    move_ctrl(
-        hwnd,
-        ID_BTN_LOG_CLEAR,
-        w - pad - log_btn_w * 2 - gap,
-        y,
-        log_btn_w,
-        row_h,
-    );
-    move_ctrl(
-        hwnd,
-        ID_BTN_LOG_SAVE,
-        w - pad - log_btn_w,
-        y,
-        log_btn_w,
-        row_h,
-    );
-    y += row_h + gap;
-
-    let log_edit_h = (h - y - pad).max(scale(120, dpi));
-    move_ctrl(hwnd, ID_EDIT_LOG, pad, y, inner_w, log_edit_h);
-}
-
-unsafe extern "system" fn log_edit_subclass_proc(
+pub(super) unsafe extern "system" fn log_edit_subclass_proc(
     hwnd: HWND,
     msg: UINT,
     wparam: WPARAM,
@@ -448,8 +109,7 @@ unsafe extern "system" fn log_edit_subclass_proc(
 
 fn append_log_line(hwnd: HWND, line: &str) {
     with_state_mut(|s| {
-        s.log_buffer.push_str(line);
-        s.log_buffer.push_str("\r\n");
+        s.append_log(line);
     });
 
     let h_log = ctrl(hwnd, ID_EDIT_LOG);
@@ -461,6 +121,7 @@ fn append_log_line(hwnd: HWND, line: &str) {
         let focused = GetFocus() == h_log;
         let mut sel_start: u32 = 0;
         let mut sel_end: u32 = 0;
+        let mut first_visible: isize = 0;
         if focused {
             SendMessageW(
                 h_log,
@@ -468,12 +129,47 @@ fn append_log_line(hwnd: HWND, line: &str) {
                 (&raw mut sel_start) as WPARAM,
                 (&raw mut sel_end) as LPARAM,
             );
+            first_visible = SendMessageW(h_log, EM_GETFIRSTVISIBLELINE, 0, 0);
+            SendMessageW(h_log, WM_SETREDRAW, FALSE as WPARAM, 0);
         }
+
         let len = GetWindowTextLengthW(h_log) as WPARAM;
         SendMessageW(h_log, EM_SETSEL, len, len as LPARAM);
         SendMessageW(h_log, EM_REPLACESEL, 0, wide_ptr as LPARAM);
+
+        let mut removed_lines: isize = 0;
+        let total_len = GetWindowTextLengthW(h_log).max(0) as usize;
+        if total_len > MAX_LOG_EDIT_CHARS {
+            let excess = total_len - MAX_LOG_EDIT_CHARS;
+            let next_line = SendMessageW(h_log, EM_LINEFROMCHAR, excess, 0) + 1;
+            let line_idx = SendMessageW(h_log, EM_LINEINDEX, next_line as WPARAM, 0);
+            let cut_idx = if line_idx > 0 {
+                removed_lines = next_line;
+                line_idx as usize
+            } else {
+                excess
+            };
+            if cut_idx > 0 {
+                SendMessageW(h_log, EM_SETSEL, 0, cut_idx as LPARAM);
+                with_wide("", |empty_ptr| {
+                    SendMessageW(h_log, EM_REPLACESEL, 0, empty_ptr as LPARAM);
+                });
+                let cut_u32 = u32::try_from(cut_idx).unwrap_or(u32::MAX);
+                sel_start = sel_start.saturating_sub(cut_u32);
+                sel_end = sel_end.saturating_sub(cut_u32);
+            }
+        }
+
         if focused {
             SendMessageW(h_log, EM_SETSEL, sel_start as WPARAM, sel_end as LPARAM);
+            let current_first = SendMessageW(h_log, EM_GETFIRSTVISIBLELINE, 0, 0);
+            let target_first = (first_visible - removed_lines).max(0);
+            let delta = target_first - current_first;
+            if delta != 0 {
+                SendMessageW(h_log, EM_LINESCROLL, 0, delta as LPARAM);
+            }
+            SendMessageW(h_log, WM_SETREDRAW, TRUE as WPARAM, 0);
+            InvalidateRect(h_log, std::ptr::null(), FALSE);
         }
     });
 }
@@ -554,22 +250,28 @@ fn start_action(hwnd: HWND, action: MaintenanceAction) {
     append_log_line(hwnd, &format!("=== {} 開始 ===", action.title()));
     set_running_ui_state(hwnd, true, &format!("状態: 実行中 ({})", action.title()));
 
-    let Some(queue) = with_state(|s| s.event_queue.clone()) else {
+    let Some((queue, notify_pending)) =
+        with_state(|s| (s.event_queue.clone(), s.notify_pending.clone()))
+    else {
         return;
     };
-    let handle = spawn_command_sequence(steps, hwnd, queue);
+    let handle = spawn_command_sequence(steps, hwnd, queue, notify_pending);
 
     with_state_mut(|s| s.worker = Some(handle));
 }
 
 fn process_worker_events(hwnd: HWND) {
-    let Some(queue) = with_state(|s| s.event_queue.clone()) else {
+    let Some((queue, notify_pending)) =
+        with_state(|s| (s.event_queue.clone(), s.notify_pending.clone()))
+    else {
         return;
     };
 
     let events: Vec<WorkerEvent> = if let Ok(mut q) = queue.lock() {
+        notify_pending.store(false, Ordering::Release);
         q.drain(..).collect()
     } else {
+        notify_pending.store(false, Ordering::Release);
         Vec::new()
     };
 
@@ -691,221 +393,6 @@ fn handle_command(hwnd: HWND, id: usize, code: u16) {
     }
 }
 
-fn create_controls(hwnd: HWND, hinst: HINSTANCE) {
-    // 1. 状態・中断
-    create_child(hwnd, hinst, "STATIC", "状態: 待機中", 0, 0, ID_LBL_STATUS);
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "実行中断(&X)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_CANCEL,
-    );
-
-    // 2. 基本修復
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "DISM オンライン修復(&D)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_DISM_ONLINE,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "SFC スキャン (/scannow)(&C)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_SFC,
-    );
-
-    // 3. ネットワーク・時刻・システム情報
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "ネットワーク一括修復(&N)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_NET_ALL,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "NTP 時刻同期(&T)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_NTP_RESYNC,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "システム情報取得(&V)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_SYSINFO,
-    );
-
-    // 4. CHKDSK
-    create_child(
-        hwnd,
-        hinst,
-        "STATIC",
-        "CHKDSK 対象:",
-        0,
-        0,
-        ID_LBL_CHKDSK_DRIVE,
-    );
-    let h_cmb_drv = create_child(
-        hwnd,
-        hinst,
-        "COMBOBOX",
-        "",
-        WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL,
-        0,
-        ID_CMB_CHKDSK_DRIVE,
-    );
-    for d in list_available_drives() {
-        with_wide(&d, |w| unsafe {
-            SendMessageW(h_cmb_drv, CB_ADDSTRING, 0, w as LPARAM);
-        });
-    }
-    unsafe {
-        SendMessageW(h_cmb_drv, CB_SETCURSEL, 0, 0);
-    }
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "CHKDSK 修復実行 (/r)(&K)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_CHKDSK,
-    );
-
-    // 5. DISM ソース指定修復
-    create_child(
-        hwnd,
-        hinst,
-        "STATIC",
-        "DISM 修復ソース（フォルダ、または WIM / ESD）:",
-        0,
-        0,
-        ID_LBL_DISM_SOURCE,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "EDIT",
-        "",
-        WS_TABSTOP | WS_BORDER | ES_LEFT | ES_AUTOHSCROLL,
-        WS_EX_CLIENTEDGE,
-        ID_EDIT_DISM_SOURCE,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "フォルダ(&F)...",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_DISM_BROWSE_DIR,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "WIM/ESD(&W)...",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_DISM_BROWSE_IMG,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "STATIC",
-        "インデックス:",
-        0,
-        0,
-        ID_LBL_DISM_INDEX,
-    );
-    let h_cmb_idx = create_child(
-        hwnd,
-        hinst,
-        "COMBOBOX",
-        "",
-        WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL,
-        0,
-        ID_CMB_DISM_INDEX,
-    );
-    for idx in 1..=10 {
-        with_wide(&idx.to_string(), |s| unsafe {
-            SendMessageW(h_cmb_idx, CB_ADDSTRING, 0, s as LPARAM);
-        });
-    }
-    unsafe {
-        SendMessageW(h_cmb_idx, CB_SETCURSEL, 0, 0);
-    }
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "DISM ソース指定修復 (/LimitAccess)(&M)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_DISM_SOURCE,
-    );
-
-    // 6. 実行ログ欄
-    create_child(hwnd, hinst, "STATIC", "実行ログ:", 0, 0, ID_LBL_LOG);
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "ログクリア(&L)",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_LOG_CLEAR,
-    );
-    create_child(
-        hwnd,
-        hinst,
-        "BUTTON",
-        "ログ保存(&S)...",
-        WS_TABSTOP | BS_PUSHBUTTON,
-        0,
-        ID_BTN_LOG_SAVE,
-    );
-    let h_log = create_child(
-        hwnd,
-        hinst,
-        "EDIT",
-        "",
-        WS_TABSTOP
-            | WS_BORDER
-            | WS_VSCROLL
-            | WS_HSCROLL
-            | ES_MULTILINE
-            | ES_AUTOVSCROLL
-            | ES_AUTOHSCROLL
-            | ES_READONLY,
-        WS_EX_CLIENTEDGE,
-        ID_EDIT_LOG,
-    );
-    unsafe {
-        // Win32複数行EDITの既定32KB上限を約2GBへ拡張 (0指定は64KBになるため明示値を使用)
-        SendMessageW(h_log, EM_SETLIMITTEXT, 0x7FFF_FFFE, 0);
-        SetWindowSubclass(h_log, log_edit_subclass_proc, LOG_SUBCLASS_ID, 0);
-    }
-}
-
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: UINT,
@@ -942,6 +429,30 @@ unsafe extern "system" fn wnd_proc(
             }
             0
         }
+        WM_GETMINMAXINFO => {
+            if lparam != 0 {
+                let dpi = with_state(|s| s.current_dpi).unwrap_or(96).max(96);
+                let mut rc = RECT {
+                    left: 0,
+                    top: 0,
+                    right: scale(MIN_CLIENT_WIDTH, dpi),
+                    bottom: scale(MIN_CLIENT_HEIGHT, dpi),
+                };
+                let (min_w, min_h) = unsafe {
+                    if AdjustWindowRectExForDpi(&raw mut rc, WS_OVERLAPPEDWINDOW, FALSE, 0, dpi)
+                        != 0
+                    {
+                        (rc.right - rc.left, rc.bottom - rc.top)
+                    } else {
+                        (scale(MIN_CLIENT_WIDTH, dpi), scale(MIN_CLIENT_HEIGHT, dpi))
+                    }
+                };
+                let mmi = unsafe { &mut *(lparam as *mut MINMAXINFO) };
+                mmi.ptMinTrackSize.x = min_w;
+                mmi.ptMinTrackSize.y = min_h;
+            }
+            0
+        }
         WM_SIZE => {
             let dpi = with_state(|s| s.current_dpi).unwrap_or(96).max(96);
             layout_controls(hwnd, dpi);
@@ -951,13 +462,21 @@ unsafe extern "system" fn wnd_proc(
             let new_dpi = (wparam & 0xFFFF) as u32;
             let dpi = new_dpi.max(96);
             let (hfont_ui, hfont_mono) = create_fonts_for_dpi(dpi);
-            with_state_mut(|s| {
+            let old_fonts = with_state_mut(|s| {
                 s.current_dpi = dpi;
-                s.release_fonts();
-                s.hfont_ui = hfont_ui;
-                s.hfont_mono = hfont_mono;
+                s.replace_fonts(hfont_ui, hfont_mono)
             });
             apply_fonts(hwnd, hfont_ui, hfont_mono);
+            if let Some((old_ui, old_mono)) = old_fonts {
+                unsafe {
+                    if !old_ui.is_null() {
+                        DeleteObject(old_ui);
+                    }
+                    if !old_mono.is_null() {
+                        DeleteObject(old_mono);
+                    }
+                }
+            }
             if lparam != 0 {
                 let rect = unsafe { &*(lparam as *const RECT) };
                 unsafe {

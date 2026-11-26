@@ -41,7 +41,7 @@ where
             return Vec::new();
         }
 
-        if self.state == TextEncodingState::Auto && Self::looks_like_utf16le(chunk) {
+        if self.state == TextEncodingState::Auto && Self::looks_like_utf16le(&self.buffer, chunk) {
             self.state = TextEncodingState::Utf16Le;
             if self.buffer.is_empty() {
                 return self.push_utf16le(chunk);
@@ -87,7 +87,7 @@ where
             }
             let line = Self::decode_utf16le_units(&self.buffer);
             self.buffer.clear();
-            return Some(line);
+            return if line.is_empty() { None } else { Some(line) };
         }
 
         if self.buffer.is_empty() {
@@ -98,11 +98,34 @@ where
         Some(line)
     }
 
-    fn looks_like_utf16le(chunk: &[u8]) -> bool {
-        if chunk.len() >= 2 && chunk[0] == 0xFF && chunk[1] == 0xFE {
+    fn looks_like_utf16le(prefix: &[u8], chunk: &[u8]) -> bool {
+        if prefix.is_empty() && chunk.len() >= 2 && chunk[0] == 0xFF && chunk[1] == 0xFE {
             return true;
         }
-        chunk.contains(&0)
+        if prefix.len() == 1 && prefix[0] == 0xFF && !chunk.is_empty() && chunk[0] == 0xFE {
+            return true;
+        }
+        let total_len = prefix.len() + chunk.len();
+        if total_len < 2 || !total_len.is_multiple_of(2) {
+            return false;
+        }
+
+        let mut iter = prefix.iter().copied().chain(chunk.iter().copied());
+        let mut ascii_utf16le_pairs = 0usize;
+        let mut even_nuls = 0usize;
+        while let (Some(lo), Some(hi)) = (iter.next(), iter.next()) {
+            if lo == 0 {
+                even_nuls += 1;
+            } else if hi == 0 {
+                ascii_utf16le_pairs += 1;
+            }
+        }
+
+        if total_len == 2 {
+            ascii_utf16le_pairs == 1
+        } else {
+            ascii_utf16le_pairs >= 2 && ascii_utf16le_pairs > even_nuls
+        }
     }
 
     fn push_utf16le(&mut self, chunk: &[u8]) -> Vec<String> {
@@ -136,6 +159,13 @@ where
             } else {
                 self.buffer.push(combined[idx]);
                 self.buffer.push(combined[idx + 1]);
+                if self.buffer.len() >= 65_536 {
+                    let line = Self::decode_utf16le_units(&self.buffer);
+                    self.buffer.clear();
+                    if !line.is_empty() {
+                        lines.push(line);
+                    }
+                }
             }
             idx += 2;
         }
@@ -230,5 +260,36 @@ mod tests {
         assert_eq!(dec.state(), TextEncodingState::Utf16Le);
         assert_eq!(lines, vec!["検証 100%"]);
         assert_eq!(dec.finish(), Some("完了".to_string()));
+    }
+
+    #[test]
+    fn test_stray_nul_does_not_latch_utf16le() {
+        let mut dec = StreamLineDecoder::new(mock_cp932);
+        // 奇数長や単発NULを含むUTF-8行はUTF-16LEに誤判定しない
+        let lines = dec.push_bytes(b"abc\0\r\n");
+        assert_eq!(lines, vec!["abc\0"]);
+        assert_eq!(dec.state(), TextEncodingState::Auto);
+
+        let utf8_lines = dec.push_bytes("正常\n".as_bytes());
+        assert_eq!(utf8_lines, vec!["正常"]);
+        assert_eq!(dec.state(), TextEncodingState::Utf8);
+    }
+
+    #[test]
+    fn test_utf16le_flushes_at_65536_bytes_and_finish_ignores_bom_or_nul_only() {
+        let mut dec = StreamLineDecoder::new(mock_cp932);
+        let mut payload = vec![0xFF, 0xFE];
+        for _ in 0..32_768 {
+            payload.extend_from_slice(&[b'A', 0x00]);
+        }
+        let lines = dec.push_bytes(&payload);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), 32_768);
+        assert_eq!(dec.finish(), None);
+
+        // BOM のみ、NUL のみの状態で finish() しても Some("") を返さない
+        let mut dec_empty = StreamLineDecoder::new(mock_cp932);
+        assert!(dec_empty.push_bytes(&[0xFF, 0xFE, 0x00, 0x00]).is_empty());
+        assert_eq!(dec_empty.finish(), None);
     }
 }

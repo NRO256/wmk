@@ -1,6 +1,6 @@
 [package]
 name = "wmk"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["NRO / Antigravity"]
 edition = "2024"
 description = "Windows Maintenance Kit (WMK) - Portable Win32 GUI for System Repair and Maintenance"
@@ -18,5 +18,5 @@ path = "src/main.rs"
 opt-level = "z"
 lto = true
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 strip = true

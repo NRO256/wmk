@@ -31,7 +31,9 @@ pub const FALSE: BOOL = 0;
 pub const WM_CREATE: UINT = 0x0001;
 pub const WM_DESTROY: UINT = 0x0002;
 pub const WM_SIZE: UINT = 0x0005;
+pub const WM_SETREDRAW: UINT = 0x000B;
 pub const WM_CLOSE: UINT = 0x0010;
+pub const WM_GETMINMAXINFO: UINT = 0x0024;
 pub const WM_SETFONT: UINT = 0x0030;
 pub const WM_GETDLGCODE: UINT = 0x0087;
 pub const WM_NCDESTROY: UINT = 0x0082;
@@ -74,8 +76,12 @@ pub const ES_AUTOHSCROLL: DWORD = 0x0080;
 pub const ES_READONLY: DWORD = 0x0800;
 pub const EM_GETSEL: UINT = 0x00B0;
 pub const EM_SETSEL: UINT = 0x00B1;
+pub const EM_LINESCROLL: UINT = 0x00B6;
+pub const EM_LINEINDEX: UINT = 0x00BB;
 pub const EM_REPLACESEL: UINT = 0x00C2;
 pub const EM_SETLIMITTEXT: UINT = 0x00C5;
+pub const EM_LINEFROMCHAR: UINT = 0x00C9;
+pub const EM_GETFIRSTVISIBLELINE: UINT = 0x00CE;
 
 pub const CBS_DROPDOWNLIST: DWORD = 0x0003;
 pub const CBS_HASSTRINGS: DWORD = 0x0200;
@@ -103,6 +109,9 @@ pub const CP_932: UINT = 932;
 pub const ES_CONTINUOUS: DWORD = 0x8000_0000;
 pub const ES_SYSTEM_REQUIRED: DWORD = 0x0000_0001;
 pub const INFINITE: DWORD = 0xFFFF_FFFF;
+
+pub const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
+pub const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x0000_2000;
 
 pub const DRIVE_REMOVABLE: UINT = 2;
 pub const DRIVE_FIXED: UINT = 3;
@@ -180,6 +189,16 @@ pub struct RECT {
 }
 
 #[repr(C)]
+#[derive(Default)]
+pub struct MINMAXINFO {
+    pub ptReserved: POINT,
+    pub ptMaxSize: POINT,
+    pub ptMaxPosition: POINT,
+    pub ptMinTrackSize: POINT,
+    pub ptMaxTrackSize: POINT,
+}
+
+#[repr(C)]
 pub struct INITCOMMONCONTROLSEX {
     pub dwSize: DWORD,
     pub dwICC: DWORD,
@@ -236,6 +255,42 @@ impl Default for BROWSEINFOW {
     }
 }
 
+#[repr(C)]
+#[derive(Default)]
+pub struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+    pub PerProcessUserTimeLimit: i64,
+    pub PerJobUserTimeLimit: i64,
+    pub LimitFlags: DWORD,
+    pub MinimumWorkingSetSize: usize,
+    pub MaximumWorkingSetSize: usize,
+    pub ActiveProcessLimit: DWORD,
+    pub Affinity: usize,
+    pub PriorityClass: DWORD,
+    pub SchedulingClass: DWORD,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct IO_COUNTERS {
+    pub ReadOperationCount: u64,
+    pub WriteOperationCount: u64,
+    pub OtherOperationCount: u64,
+    pub ReadTransferCount: u64,
+    pub WriteTransferCount: u64,
+    pub OtherTransferCount: u64,
+}
+
+#[repr(C)]
+#[derive(Default)]
+pub struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+    pub BasicLimitInformation: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+    pub IoInfo: IO_COUNTERS,
+    pub ProcessMemoryLimit: usize,
+    pub JobMemoryLimit: usize,
+    pub PeakProcessMemoryUsed: usize,
+    pub PeakJobMemoryUsed: usize,
+}
+
 #[link(name = "kernel32")]
 unsafe extern "system" {
     pub fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
@@ -252,6 +307,16 @@ unsafe extern "system" {
     ) -> i32;
     pub fn SetThreadExecutionState(esFlags: DWORD) -> DWORD;
     pub fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) -> DWORD;
+    pub fn CreateJobObjectW(lpJobAttributes: *const c_void, lpName: *const u16) -> HANDLE;
+    pub fn SetInformationJobObject(
+        hJob: HANDLE,
+        JobObjectInformationClass: i32,
+        lpJobObjectInformation: *const c_void,
+        cbJobObjectInformationLength: DWORD,
+    ) -> BOOL;
+    pub fn AssignProcessToJobObject(hJob: HANDLE, hProcess: HANDLE) -> BOOL;
+    pub fn TerminateJobObject(hJob: HANDLE, uExitCode: UINT) -> BOOL;
+    pub fn CloseHandle(hObject: HANDLE) -> BOOL;
 }
 
 #[link(name = "user32")]
@@ -309,6 +374,14 @@ unsafe extern "system" {
     pub fn LoadCursorW(hInstance: HINSTANCE, lpCursorName: *const u16) -> HICON;
     pub fn LoadIconW(hInstance: HINSTANCE, lpIconName: *const u16) -> HICON;
     pub fn GetDpiForWindow(hwnd: HWND) -> UINT;
+    pub fn AdjustWindowRectExForDpi(
+        lpRect: *mut RECT,
+        dwStyle: DWORD,
+        bMenu: BOOL,
+        dwExStyle: DWORD,
+        dpi: UINT,
+    ) -> BOOL;
+    pub fn InvalidateRect(hWnd: HWND, lpRect: *const RECT, bErase: BOOL) -> BOOL;
     pub fn GetDlgItem(hDlg: HWND, nIDDlgItem: i32) -> HWND;
 }
 

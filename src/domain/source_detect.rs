@@ -51,9 +51,21 @@ pub fn format_dism_source_value(raw_input: &str, index: u32) -> Result<String, S
         }
         // 末尾に `:数字` が既に付いているか確認
         if let Some(colon_pos) = rest.rfind(':') {
+            let rest_bytes = rest.as_bytes();
+            let is_drive_colon = colon_pos == 1
+                && rest_bytes[0].is_ascii_alphabetic()
+                && matches!(rest_bytes.get(2), Some(b'\\') | Some(b'/'));
             let suffix = &rest[colon_pos + 1..];
-            // ドライブレターのコロン（例: C:\...）ではないことを確認
-            if colon_pos > 1 && !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
+            if !is_drive_colon
+                && colon_pos > 0
+                && !suffix.is_empty()
+                && suffix.chars().all(|c| c.is_ascii_digit())
+            {
+                let parsed: u32 = suffix.parse().unwrap_or(0);
+                if parsed == 0 {
+                    let path_part = &rest[..colon_pos];
+                    return Ok(format!("{prefix}{path_part}:1"));
+                }
                 return Ok(format!("{prefix}{rest}"));
             }
         }
@@ -96,6 +108,15 @@ mod tests {
         assert_eq!(
             format_dism_source_value(r"esd:E:\sources\install.esd", 4).unwrap(),
             r"ESD:E:\sources\install.esd:4"
+        );
+        assert_eq!(format_dism_source_value("WIM:a:1", 2).unwrap(), "WIM:a:1");
+        assert_eq!(
+            format_dism_source_value(r"WIM:C:\123", 2).unwrap(),
+            r"WIM:C:\123:2"
+        );
+        assert_eq!(
+            format_dism_source_value(r"WIM:E:\sources\install.wim:0", 3).unwrap(),
+            r"WIM:E:\sources\install.wim:1"
         );
     }
 

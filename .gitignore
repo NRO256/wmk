@@ -1,3 +1,11 @@
 /target/
 *.log
 *.tmp
+.env
+.env.*
+config.json
+credentials.json
+*.exe
+*.pdb
+*.bak
+/docs/

@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test --lib
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package release archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path WMK -Force | Out-Null
+          Copy-Item target/release/WMK.exe WMK/
+          Copy-Item README.md WMK/
+          Copy-Item README.txt WMK/
+          Copy-Item LICENSE WMK/
+          Compress-Archive -Path WMK -DestinationPath "WMK-${{ github.ref_name }}-win.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: WMK-${{ github.ref_name }}-win.zip
+          generate_release_notes: true
