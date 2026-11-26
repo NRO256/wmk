@@ -1,8 +1,9 @@
 pub mod dialogs;
 pub mod layout;
 pub mod state;
+pub mod uia_notify;
 
-use crate::domain::commands::{MaintenanceAction, build_command_steps};
+use crate::domain::commands::{MaintenanceAction, build_command_steps, describe_exit_code};
 use crate::domain::source_detect::detect_portable_image_in_dir;
 use crate::platform::io::{get_exe_directory, save_text_utf8};
 use crate::platform::process::{WM_APP_WORKER_EVENT, WorkerEvent, spawn_command_sequence};
@@ -12,31 +13,44 @@ use crate::platform::win32::{
     DeleteObject, DestroyWindow, DispatchMessageW, EM_GETFIRSTVISIBLELINE, EM_GETSEL,
     EM_LINEFROMCHAR, EM_LINEINDEX, EM_LINESCROLL, EM_REPLACESEL, EM_SETSEL, EnableWindow, FALSE,
     GetDpiForWindow, GetFocus, GetKeyState, GetMessageW, GetModuleHandleW, GetParent,
-    GetWindowTextLengthW, HBRUSH, HWND, ICC_STANDARD_CLASSES, IDC_ARROW, IDI_APPLICATION,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, InvalidateRect, IsDialogMessageW, IsWindowEnabled,
-    LPARAM, LRESULT, LoadCursorW, LoadIconW, MINMAXINFO, MSG, MoveWindow, PostQuitMessage, RECT,
-    RegisterClassExW, RemoveWindowSubclass, SW_SHOW, SendMessageW, SetFocus, ShowWindow, TRUE,
+    GetWindowTextLengthW, HBRUSH, HWND, ICC_PROGRESS_CLASS, ICC_STANDARD_CLASSES, IDC_ARROW,
+    IDI_APPLICATION, IDI_SHIELD, INITCOMMONCONTROLSEX, InitCommonControlsEx, InvalidateRect,
+    IsDialogMessageW, IsWindowEnabled, KillTimer, LPARAM, LRESULT, LoadCursorW, LoadIconW,
+    MINMAXINFO, MSG, MoveWindow, PBM_SETMARQUEE, PostQuitMessage, RECT, RegisterClassExW,
+    RemoveWindowSubclass, SW_HIDE, SW_SHOW, SendMessageW, SetFocus, SetTimer, ShowWindow, TRUE,
     TranslateMessage, UINT, UINT_PTR, UpdateWindow, VK_CONTROL, VK_ESCAPE, WM_CHAR, WM_CLOSE,
     WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_GETDLGCODE, WM_GETMINMAXINFO, WM_KEYDOWN,
-    WM_NCDESTROY, WM_SETREDRAW, WM_SIZE, WNDCLASSEXW, WPARAM, WS_OVERLAPPEDWINDOW, get_window_text,
-    make_int_resource_w, set_window_text, with_wide,
+    WM_NCDESTROY, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW, WPARAM, WS_OVERLAPPEDWINDOW,
+    format_local_time_hms, get_window_text, make_int_resource_w, set_window_text, with_wide,
 };
 use crate::ui::dialogs::{
     browse_folder, confirm_yes_no, open_image_file, save_log_file, show_error, show_info,
 };
 use crate::ui::layout::{
-    ACTION_BUTTON_IDS, ID_BTN_CANCEL, ID_BTN_CHKDSK, ID_BTN_DISM_BROWSE_DIR,
-    ID_BTN_DISM_BROWSE_IMG, ID_BTN_DISM_ONLINE, ID_BTN_DISM_SOURCE, ID_BTN_LOG_CLEAR,
-    ID_BTN_LOG_SAVE, ID_BTN_NET_ALL, ID_BTN_NTP_RESYNC, ID_BTN_SFC, ID_BTN_SYSINFO,
-    ID_CMB_CHKDSK_DRIVE, ID_CMB_DISM_INDEX, ID_EDIT_DISM_SOURCE, ID_EDIT_LOG, ID_LBL_STATUS,
-    MIN_CLIENT_HEIGHT, MIN_CLIENT_WIDTH, apply_fonts, create_controls, create_fonts_for_dpi, ctrl,
-    layout_controls, scale,
+    ID_BTN_CANCEL, ID_BTN_CHKDSK, ID_BTN_DISM_BROWSE_DIR, ID_BTN_DISM_BROWSE_IMG,
+    ID_BTN_DISM_ONLINE, ID_BTN_DISM_SOURCE, ID_BTN_LOG_CLEAR, ID_BTN_LOG_SAVE, ID_BTN_NET_ALL,
+    ID_BTN_NTP_RESYNC, ID_BTN_SFC, ID_BTN_SYSINFO, ID_CMB_CHKDSK_DRIVE, ID_CMB_DISM_INDEX,
+    ID_EDIT_DISM_SOURCE, ID_EDIT_LOG, ID_LBL_STATUS, ID_PROGRESS_BAR, MIN_CLIENT_HEIGHT,
+    MIN_CLIENT_WIDTH, RUNNING_DISABLE_IDS, apply_fonts, create_controls, create_fonts_for_dpi,
+    ctrl, layout_controls, scale,
 };
 use crate::ui::state::AppState;
+use crate::ui::uia_notify::announce_uia_notification;
 use std::cell::RefCell;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 const MAX_LOG_EDIT_CHARS: usize = 512 * 1024;
+const TIMER_ELAPSED_ID: UINT_PTR = 1;
+
+fn append_log_timestamped(hwnd: HWND, line: &str) {
+    let ts = format_local_time_hms();
+    append_log_line(hwnd, &format!("[{ts}] {line}"));
+}
+
+fn format_elapsed_mm_ss(secs: u64) -> String {
+    format!("{:02}:{:02}", secs / 60, secs % 60)
+}
 
 thread_local! {
     static APP_STATE: RefCell<AppState> = RefCell::new(AppState::new());
@@ -180,28 +194,38 @@ fn set_running_ui_state(hwnd: HWND, running: bool, status_text: &str) {
         set_window_text(h_status, status_text);
     }
 
+    let h_prog = ctrl(hwnd, ID_PROGRESS_BAR);
     let h_cancel = ctrl(hwnd, ID_BTN_CANCEL);
     unsafe {
+        if !h_prog.is_null() {
+            if running {
+                ShowWindow(h_prog, SW_SHOW);
+                SendMessageW(h_prog, PBM_SETMARQUEE, 1, 30);
+            } else {
+                SendMessageW(h_prog, PBM_SETMARQUEE, 0, 0);
+                ShowWindow(h_prog, SW_HIDE);
+            }
+        }
         if running {
             if !h_cancel.is_null() {
                 EnableWindow(h_cancel, TRUE);
                 let focused = GetFocus();
-                let on_action_btn = ACTION_BUTTON_IDS
+                let on_disabled_ctrl = RUNNING_DISABLE_IDS
                     .iter()
                     .any(|&id| ctrl(hwnd, id) == focused);
-                if on_action_btn {
+                if on_disabled_ctrl {
                     with_state_mut(|s| s.last_focused_ctrl = focused);
                     SetFocus(h_cancel);
                 }
             }
-            for &id in ACTION_BUTTON_IDS {
+            for &id in RUNNING_DISABLE_IDS {
                 let h = ctrl(hwnd, id);
                 if !h.is_null() {
                     EnableWindow(h, FALSE);
                 }
             }
         } else {
-            for &id in ACTION_BUTTON_IDS {
+            for &id in RUNNING_DISABLE_IDS {
                 let h = ctrl(hwnd, id);
                 if !h.is_null() {
                     EnableWindow(h, TRUE);
@@ -247,8 +271,17 @@ fn start_action(hwnd: HWND, action: MaintenanceAction) {
         return;
     }
 
-    append_log_line(hwnd, &format!("=== {} 開始 ===", action.title()));
-    set_running_ui_state(hwnd, true, &format!("状態: 実行中 ({})", action.title()));
+    let title = action.title().to_string();
+    append_log_timestamped(hwnd, &format!("=== {title} 開始 ==="));
+    with_state_mut(|s| {
+        s.running_action = Some(action);
+        s.started_at = Some(Instant::now());
+    });
+    set_running_ui_state(hwnd, true, &format!("状態: 実行中 ({title}) [00:00]"));
+    unsafe {
+        SetTimer(hwnd, TIMER_ELAPSED_ID, 1000, std::ptr::null());
+    }
+    announce_uia_notification(hwnd, &format!("{title} を開始しました。"));
 
     let Some((queue, notify_pending)) =
         with_state(|s| (s.event_queue.clone(), s.notify_pending.clone()))
@@ -284,25 +317,65 @@ fn process_worker_events(hwnd: HWND) {
                 cancelled,
                 last_exit_code,
             } => {
-                with_state_mut(|s| {
+                unsafe {
+                    KillTimer(hwnd, TIMER_ELAPSED_ID);
+                }
+                let (finished_action, elapsed_str) = with_state_mut(|s| {
                     s.worker = None;
-                });
+                    let act = s.running_action.take();
+                    let el = s
+                        .started_at
+                        .take()
+                        .map(|t| format_elapsed_mm_ss(t.elapsed().as_secs()));
+                    (act, el)
+                })
+                .unwrap_or((None, None));
                 let msg = if cancelled {
                     "=== ユーザーにより中断されました ===".to_string()
                 } else if let Some(code) = last_exit_code {
-                    format!("=== 完了 (終了コード: {code}) ===")
+                    if let Some(ref el) = elapsed_str {
+                        format!("=== 完了 (終了コード: {code}, 所要時間: {el}) ===")
+                    } else {
+                        format!("=== 完了 (終了コード: {code}) ===")
+                    }
+                } else if let Some(ref el) = elapsed_str {
+                    format!("=== 完了 (所要時間: {el}) ===")
                 } else {
                     "=== 完了 ===".to_string()
                 };
-                append_log_line(hwnd, &msg);
+                append_log_timestamped(hwnd, &msg);
+                let guidance = if !cancelled
+                    && let Some(code) = last_exit_code
+                    && let Some(ref act) = finished_action
+                {
+                    let desc = describe_exit_code(act, code);
+                    append_log_line(hwnd, &format!("[案内] {desc}"));
+                    Some(desc)
+                } else {
+                    None
+                };
                 set_running_ui_state(hwnd, false, "状態: 待機中");
+                let uia_msg = if cancelled {
+                    "処理を中断しました。".to_string()
+                } else if let Some(desc) = guidance {
+                    format!("処理が完了しました。{desc}")
+                } else {
+                    "処理が完了しました。".to_string()
+                };
+                announce_uia_notification(hwnd, &uia_msg);
             }
             WorkerEvent::Error(err) => {
+                unsafe {
+                    KillTimer(hwnd, TIMER_ELAPSED_ID);
+                }
                 with_state_mut(|s| {
                     s.worker = None;
+                    s.running_action = None;
+                    s.started_at = None;
                 });
-                append_log_line(hwnd, &format!("[エラー] {err}"));
+                append_log_timestamped(hwnd, &format!("[エラー] {err}"));
                 set_running_ui_state(hwnd, false, "状態: エラー終了");
+                announce_uia_notification(hwnd, &format!("エラーが発生しました: {err}"));
                 show_error(hwnd, "実行エラー", &err);
             }
         }
@@ -503,6 +576,24 @@ unsafe extern "system" fn wnd_proc(
             process_worker_events(hwnd);
             0
         }
+        WM_TIMER => {
+            if wparam == TIMER_ELAPSED_ID
+                && let Some((title, secs)) = with_state(|s| {
+                    s.running_action
+                        .as_ref()
+                        .zip(s.started_at)
+                        .map(|(act, st)| (act.title(), st.elapsed().as_secs()))
+                })
+                .flatten()
+            {
+                let h_status = ctrl(hwnd, ID_LBL_STATUS);
+                if !h_status.is_null() {
+                    let text = format!("状態: 実行中 ({title}) [{}]", format_elapsed_mm_ss(secs));
+                    set_window_text(h_status, &text);
+                }
+            }
+            0
+        }
         WM_CLOSE => {
             let is_running = with_state(|s| s.is_running()).unwrap_or(false);
             if is_running
@@ -520,8 +611,13 @@ unsafe extern "system" fn wnd_proc(
             0
         }
         WM_DESTROY => {
+            unsafe {
+                KillTimer(hwnd, TIMER_ELAPSED_ID);
+            }
             with_state_mut(|s| {
                 s.worker.take();
+                s.running_action = None;
+                s.started_at = None;
                 s.release_fonts();
             });
             unsafe {
@@ -539,7 +635,7 @@ pub fn run_app() -> i32 {
     unsafe {
         let icc = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_STANDARD_CLASSES,
+            dwICC: ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS,
         };
         InitCommonControlsEx(&raw const icc);
 
@@ -548,14 +644,19 @@ pub fn run_app() -> i32 {
             with_wide(
                 concat!("Windows Maintenance Kit (WMK) v", env!("CARGO_PKG_VERSION")),
                 |title_ptr| {
+                    let shield_icon =
+                        LoadIconW(std::ptr::null_mut(), make_int_resource_w(IDI_SHIELD));
+                    let app_icon = if shield_icon.is_null() {
+                        LoadIconW(std::ptr::null_mut(), make_int_resource_w(IDI_APPLICATION))
+                    } else {
+                        shield_icon
+                    };
                     let wc = WNDCLASSEXW {
                         cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
                         lpfnWndProc: Some(wnd_proc),
                         hInstance: hinst,
-                        hIcon: LoadIconW(
-                            std::ptr::null_mut(),
-                            make_int_resource_w(IDI_APPLICATION),
-                        ),
+                        hIcon: app_icon,
+                        hIconSm: app_icon,
                         hCursor: LoadCursorW(std::ptr::null_mut(), make_int_resource_w(IDC_ARROW)),
                         hbrBackground: (COLOR_BTNFACE + 1) as HBRUSH,
                         lpszClassName: class_ptr,

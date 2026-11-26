@@ -1,7 +1,9 @@
+use crate::domain::commands::{MaintenanceAction, trim_log_buffer};
 use crate::platform::process::{WorkerEvent, WorkerHandle};
 use crate::platform::win32::{DeleteObject, HFONT, HWND};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use std::time::Instant;
 
 pub const MAX_LOG_BUFFER_BYTES: usize = 512 * 1024;
 
@@ -14,6 +16,8 @@ pub struct AppState {
     pub notify_pending: Arc<AtomicBool>,
     pub log_buffer: String,
     pub current_dpi: u32,
+    pub running_action: Option<MaintenanceAction>,
+    pub started_at: Option<Instant>,
 }
 
 impl AppState {
@@ -27,6 +31,8 @@ impl AppState {
             notify_pending: Arc::new(AtomicBool::new(false)),
             log_buffer: String::new(),
             current_dpi: 96,
+            running_action: None,
+            started_at: None,
         }
     }
 
@@ -37,17 +43,7 @@ impl AppState {
     pub fn append_log(&mut self, line: &str) {
         self.log_buffer.push_str(line);
         self.log_buffer.push_str("\r\n");
-        if self.log_buffer.len() > MAX_LOG_BUFFER_BYTES {
-            let excess = self.log_buffer.len() - MAX_LOG_BUFFER_BYTES;
-            let mut cut_pos = excess;
-            while cut_pos < self.log_buffer.len() && !self.log_buffer.is_char_boundary(cut_pos) {
-                cut_pos += 1;
-            }
-            if let Some(rel_nl) = self.log_buffer[cut_pos..].find('\n') {
-                cut_pos += rel_nl + 1;
-            }
-            self.log_buffer.drain(..cut_pos);
-        }
+        trim_log_buffer(&mut self.log_buffer, MAX_LOG_BUFFER_BYTES);
     }
 
     pub fn replace_fonts(&mut self, hfont_ui: HFONT, hfont_mono: HFONT) -> (HFONT, HFONT) {

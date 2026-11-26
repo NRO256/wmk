@@ -148,6 +148,40 @@ pub fn build_command_steps(action: &MaintenanceAction) -> Result<Vec<CommandStep
     }
 }
 
+/// ログバッファが上限バイト数を超えた場合、行境界を優先して先頭からトリミングする。
+pub fn trim_log_buffer(buf: &mut String, max_bytes: usize) {
+    if buf.len() <= max_bytes {
+        return;
+    }
+    let excess = buf.len() - max_bytes;
+    let mut cut_pos = excess;
+    while cut_pos < buf.len() && !buf.is_char_boundary(cut_pos) {
+        cut_pos += 1;
+    }
+    if let Some(rel_nl) = buf[cut_pos..].find('\n') {
+        cut_pos += rel_nl + 1;
+    }
+    buf.drain(..cut_pos);
+}
+
+/// 実行アクションと終了コードに応じた案内メッセージを返す。
+pub fn describe_exit_code(action: &MaintenanceAction, code: i32) -> &'static str {
+    match action {
+        MaintenanceAction::ChkdskRepair { .. } => match code {
+            0 => "正常終了（エラーは検出されませんでした）。",
+            1 => "エラーが検出・修復されたか、次回再起動時のチェックが予約されました。",
+            2 => "ディスクのクリーンアップを実行しました。",
+            3 => "チェックが未完了、またはエラーが発生しました。ログを確認してください。",
+            _ => "異常終了しました。ログ内容を確認してください。",
+        },
+        _ => match code {
+            0 => "正常終了しました。",
+            3010 => "正常終了しました（変更を完全に反映するには PC の再起動が必要です）。",
+            _ => "警告またはエラーで終了しました。ログ内容を確認してください。",
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +233,29 @@ mod tests {
         let steps = build_command_steps(&action).unwrap();
         assert_eq!(steps[0].args, vec!["C:", "/r"]);
         assert_eq!(steps[0].stdin_response, Some("Y\r\n"));
+    }
+
+    #[test]
+    fn test_describe_exit_code() {
+        assert!(describe_exit_code(&MaintenanceAction::DismRestoreHealth, 0).contains("正常終了"));
+        assert!(describe_exit_code(&MaintenanceAction::DismRestoreHealth, 3010).contains("再起動"));
+        assert!(describe_exit_code(&MaintenanceAction::SfcScannow, 1).contains("エラー"));
+        assert!(
+            describe_exit_code(
+                &MaintenanceAction::ChkdskRepair {
+                    drive: "C:".to_string()
+                },
+                1
+            )
+            .contains("再起動")
+        );
+    }
+
+    #[test]
+    fn test_trim_log_buffer_respects_line_boundary_and_utf8() {
+        let mut buf = "あいう\r\n12345\r\n67890\r\n".to_string();
+        trim_log_buffer(&mut buf, 14);
+        assert!(buf.len() <= 14);
+        assert_eq!(buf, "67890\r\n");
     }
 }

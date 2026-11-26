@@ -11,6 +11,7 @@ pub type HFONT = *mut c_void;
 pub type HBRUSH = *mut c_void;
 pub type HGDIOBJ = *mut c_void;
 pub type HICON = *mut c_void;
+pub type HMODULE = *mut c_void;
 pub type HANDLE = *mut c_void;
 pub type UINT_PTR = usize;
 pub type DWORD_PTR = usize;
@@ -22,6 +23,7 @@ pub type DWORD = u32;
 pub type WORD = u16;
 pub type UINT = u32;
 pub type LONG = i32;
+pub type HRESULT = i32;
 pub type ATOM = u16;
 
 pub const TRUE: BOOL = 1;
@@ -38,6 +40,7 @@ pub const WM_SETFONT: UINT = 0x0030;
 pub const WM_GETDLGCODE: UINT = 0x0087;
 pub const WM_NCDESTROY: UINT = 0x0082;
 pub const WM_COMMAND: UINT = 0x0111;
+pub const WM_TIMER: UINT = 0x0113;
 pub const WM_KEYDOWN: UINT = 0x0100;
 pub const WM_CHAR: UINT = 0x0102;
 pub const WM_DPICHANGED: UINT = 0x02E0;
@@ -91,10 +94,16 @@ pub const CB_SETCURSEL: UINT = 0x014E;
 
 // Misc
 pub const CW_USEDEFAULT: i32 = -0x8000_0000_i32;
+pub const SW_HIDE: i32 = 0;
 pub const SW_SHOW: i32 = 5;
+pub const PBS_MARQUEE: DWORD = 0x0000_0008;
+pub const PBM_SETMARQUEE: UINT = 0x040A;
+pub const S_OK: i32 = 0;
+pub const LOAD_LIBRARY_SEARCH_SYSTEM32: DWORD = 0x0000_0800;
 pub const COLOR_BTNFACE: i32 = 15;
 pub const IDC_ARROW: u16 = 32512;
 pub const IDI_APPLICATION: u16 = 32512;
+pub const IDI_SHIELD: u16 = 32518;
 
 pub const MB_OK: UINT = 0x0000_0000;
 pub const MB_YESNO: UINT = 0x0000_0004;
@@ -124,8 +133,15 @@ pub const OFN_NOCHANGEDIR: DWORD = 0x0000_0008;
 pub const BIF_RETURNONLYFSDIRS: UINT = 0x0000_0001;
 pub const BIF_NEWDIALOGSTYLE: UINT = 0x0000_0040;
 pub const COINIT_APARTMENTTHREADED: DWORD = 0x2;
+pub const CLSCTX_INPROC_SERVER: DWORD = 1;
+pub const FOS_PICKFOLDERS: DWORD = 0x0000_0020;
+pub const FOS_FORCEFILESYSTEM: DWORD = 0x0000_0040;
+pub const FOS_PATHMUSTEXIST: DWORD = 0x0000_0800;
+pub const SIGDN_FILESYSPATH: DWORD = 0x8005_8000;
+pub const HRESULT_CANCELLED: HRESULT = 0x8007_04C7_u32 as HRESULT;
 
 pub const ICC_STANDARD_CLASSES: DWORD = 0x0000_4000;
+pub const ICC_PROGRESS_CLASS: DWORD = 0x0000_0020;
 
 pub const FW_NORMAL: i32 = 400;
 pub const DEFAULT_CHARSET: DWORD = 1;
@@ -291,6 +307,97 @@ pub struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
     pub PeakJobMemoryUsed: usize,
 }
 
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+pub struct SYSTEMTIME {
+    pub wYear: WORD,
+    pub wMonth: WORD,
+    pub wDayOfWeek: WORD,
+    pub wDay: WORD,
+    pub wHour: WORD,
+    pub wMinute: WORD,
+    pub wSecond: WORD,
+    pub wMilliseconds: WORD,
+}
+
+#[repr(C)]
+pub struct GUID {
+    pub data1: u32,
+    pub data2: u16,
+    pub data3: u16,
+    pub data4: [u8; 8],
+}
+
+pub const CLSID_FILE_OPEN_DIALOG: GUID = GUID {
+    data1: 0xDC1C_5A9C,
+    data2: 0xE88A,
+    data3: 0x4dde,
+    data4: [0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7],
+};
+
+pub const IID_IFILE_OPEN_DIALOG: GUID = GUID {
+    data1: 0xd57c_7288,
+    data2: 0xd4ad,
+    data3: 0x4768,
+    data4: [0xbe, 0x02, 0x9d, 0x96, 0x95, 0x32, 0xd9, 0x60],
+};
+
+#[repr(C)]
+pub struct IFileOpenDialog {
+    pub lpVtbl: *const IFileOpenDialogVtbl,
+}
+
+#[repr(C)]
+pub struct IFileOpenDialogVtbl {
+    pub QueryInterface: *const c_void,
+    pub AddRef: *const c_void,
+    pub Release: unsafe extern "system" fn(this: *mut c_void) -> u32,
+    pub Show: unsafe extern "system" fn(this: *mut c_void, hwndOwner: HWND) -> HRESULT,
+    pub SetFileTypes: *const c_void,
+    pub SetFileTypeIndex: *const c_void,
+    pub GetFileTypeIndex: *const c_void,
+    pub Advise: *const c_void,
+    pub Unadvise: *const c_void,
+    pub SetOptions: unsafe extern "system" fn(this: *mut c_void, fos: DWORD) -> HRESULT,
+    pub GetOptions: unsafe extern "system" fn(this: *mut c_void, pfos: *mut DWORD) -> HRESULT,
+    pub SetDefaultFolder: *const c_void,
+    pub SetFolder: *const c_void,
+    pub GetFolder: *const c_void,
+    pub GetCurrentSelection: *const c_void,
+    pub SetFileName: *const c_void,
+    pub GetFileName: *const c_void,
+    pub SetTitle: unsafe extern "system" fn(this: *mut c_void, pszTitle: *const u16) -> HRESULT,
+    pub SetOkButtonLabel: *const c_void,
+    pub SetFileNameLabel: *const c_void,
+    pub GetResult:
+        unsafe extern "system" fn(this: *mut c_void, ppsi: *mut *mut IShellItem) -> HRESULT,
+    pub AddPlace: *const c_void,
+    pub SetDefaultExtension: *const c_void,
+    pub Close: *const c_void,
+    pub SetClientGuid: *const c_void,
+    pub ClearClientData: *const c_void,
+    pub SetFilter: *const c_void,
+}
+
+#[repr(C)]
+pub struct IShellItem {
+    pub lpVtbl: *const IShellItemVtbl,
+}
+
+#[repr(C)]
+pub struct IShellItemVtbl {
+    pub QueryInterface: *const c_void,
+    pub AddRef: *const c_void,
+    pub Release: unsafe extern "system" fn(this: *mut c_void) -> u32,
+    pub BindToHandler: *const c_void,
+    pub GetParent: *const c_void,
+    pub GetDisplayName: unsafe extern "system" fn(
+        this: *mut c_void,
+        sigdnName: DWORD,
+        ppszName: *mut *mut u16,
+    ) -> HRESULT,
+}
+
 #[link(name = "kernel32")]
 unsafe extern "system" {
     pub fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
@@ -317,6 +424,9 @@ unsafe extern "system" {
     pub fn AssignProcessToJobObject(hJob: HANDLE, hProcess: HANDLE) -> BOOL;
     pub fn TerminateJobObject(hJob: HANDLE, uExitCode: UINT) -> BOOL;
     pub fn CloseHandle(hObject: HANDLE) -> BOOL;
+    pub fn LoadLibraryExW(lpLibFileName: *const u16, hFile: HANDLE, dwFlags: DWORD) -> HMODULE;
+    pub fn GetProcAddress(hModule: HMODULE, lpProcName: *const i8) -> *mut c_void;
+    pub fn GetLocalTime(lpSystemTime: *mut SYSTEMTIME);
 }
 
 #[link(name = "user32")]
@@ -357,6 +467,13 @@ unsafe extern "system" {
     pub fn GetWindowTextW(hWnd: HWND, lpString: *mut u16, nMaxCount: i32) -> i32;
     pub fn EnableWindow(hWnd: HWND, bEnable: BOOL) -> BOOL;
     pub fn SetFocus(hWnd: HWND) -> HWND;
+    pub fn SetTimer(
+        hWnd: HWND,
+        nIDEvent: UINT_PTR,
+        uElapse: UINT,
+        lpTimerFunc: *const c_void,
+    ) -> UINT_PTR;
+    pub fn KillTimer(hWnd: HWND, uIDEvent: UINT_PTR) -> BOOL;
     pub fn GetFocus() -> HWND;
     pub fn GetParent(hWnd: HWND) -> HWND;
     pub fn IsWindowEnabled(hWnd: HWND) -> BOOL;
@@ -438,8 +555,21 @@ unsafe extern "system" {
 #[link(name = "ole32")]
 unsafe extern "system" {
     pub fn CoTaskMemFree(pv: *mut c_void);
-    pub fn CoInitializeEx(pvReserved: *mut c_void, dwCoInit: DWORD) -> i32;
+    pub fn CoInitializeEx(pvReserved: *mut c_void, dwCoInit: DWORD) -> HRESULT;
     pub fn CoUninitialize();
+    pub fn CoCreateInstance(
+        rclsid: *const GUID,
+        pUnkOuter: *mut c_void,
+        dwClsContext: DWORD,
+        riid: *const GUID,
+        ppv: *mut *mut c_void,
+    ) -> HRESULT;
+}
+
+#[link(name = "oleaut32")]
+unsafe extern "system" {
+    pub fn SysAllocString(psz: *const u16) -> *const u16;
+    pub fn SysFreeString(bstrString: *const u16);
 }
 
 pub fn to_wide_null(s: &str) -> Vec<u16> {
@@ -464,6 +594,26 @@ pub fn with_wide<R>(s: &str, f: impl FnOnce(*const u16) -> R) -> R {
 pub fn from_wide_slice(buf: &[u16]) -> String {
     let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     String::from_utf16_lossy(&buf[..end])
+}
+
+/// NUL終端された UTF-16 ポインタから String を復元する。
+pub unsafe fn from_wide_ptr(ptr: *const u16) -> String {
+    if ptr.is_null() {
+        return String::new();
+    }
+    let mut len = 0usize;
+    while unsafe { *ptr.add(len) } != 0 {
+        len += 1;
+    }
+    String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(ptr, len) })
+}
+
+pub fn format_local_time_hms() -> String {
+    let mut st = SYSTEMTIME::default();
+    unsafe {
+        GetLocalTime(&raw mut st);
+    }
+    format!("{:02}:{:02}:{:02}", st.wHour, st.wMinute, st.wSecond)
 }
 
 /// 64bit符号拡張バグ回避のため必ず u16 -> usize -> *const u16 と変換する。

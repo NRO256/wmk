@@ -1,6 +1,6 @@
 [package]
 name = "wmk"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["NRO / Antigravity"]
 edition = "2024"
 description = "Windows Maintenance Kit (WMK) - Portable Win32 GUI for System Repair and Maintenance"

@@ -4,14 +4,15 @@ use crate::platform::win32::{
     CLIP_DEFAULT_PRECIS, CreateFontW, CreateWindowExW, DEFAULT_CHARSET, DEFAULT_PITCH,
     EM_SETLIMITTEXT, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY,
     FIXED_PITCH, FW_NORMAL, GetClientRect, GetDlgItem, HFONT, HINSTANCE, HMENU, HWND, LPARAM,
-    MoveWindow, OUT_DEFAULT_PRECIS, RECT, SendMessageW, SetWindowSubclass, TRUE, UINT_PTR,
-    WM_SETFONT, WPARAM, WS_BORDER, WS_CHILD, WS_EX_CLIENTEDGE, WS_HSCROLL, WS_TABSTOP, WS_VISIBLE,
-    WS_VSCROLL, with_wide,
+    MoveWindow, OUT_DEFAULT_PRECIS, PBS_MARQUEE, RECT, SW_HIDE, SendMessageW, SetWindowSubclass,
+    ShowWindow, TRUE, UINT_PTR, WM_SETFONT, WPARAM, WS_BORDER, WS_CHILD, WS_EX_CLIENTEDGE,
+    WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL, with_wide,
 };
 
 // 共通・上部バー
 pub(super) const ID_LBL_STATUS: usize = 101;
 pub(super) const ID_BTN_CANCEL: usize = 102;
+pub(super) const ID_PROGRESS_BAR: usize = 103;
 
 // メンテナンス操作
 pub(super) const ID_BTN_DISM_ONLINE: usize = 201;
@@ -42,15 +43,18 @@ pub(super) const LOG_SUBCLASS_ID: UINT_PTR = 1;
 pub(super) const MIN_CLIENT_WIDTH: i32 = 700;
 pub(super) const MIN_CLIENT_HEIGHT: i32 = 520;
 
-pub(super) const ACTION_BUTTON_IDS: &[usize] = &[
+pub(super) const RUNNING_DISABLE_IDS: &[usize] = &[
     ID_BTN_DISM_ONLINE,
     ID_BTN_SFC,
     ID_BTN_NET_ALL,
     ID_BTN_NTP_RESYNC,
     ID_BTN_SYSINFO,
+    ID_CMB_CHKDSK_DRIVE,
     ID_BTN_CHKDSK,
+    ID_EDIT_DISM_SOURCE,
     ID_BTN_DISM_BROWSE_DIR,
     ID_BTN_DISM_BROWSE_IMG,
+    ID_CMB_DISM_INDEX,
     ID_BTN_DISM_SOURCE,
 ];
 
@@ -116,8 +120,8 @@ fn create_child(
 
 pub(super) fn create_fonts_for_dpi(dpi: u32) -> (HFONT, HFONT) {
     let height = -scale(14, dpi);
-    with_wide("Yu Gothic UI", |ui_face| {
-        with_wide("Consolas", |mono_face| unsafe {
+    with_wide("BIZ UDPゴシック", |ui_face| {
+        with_wide("BIZ UDゴシック", |mono_face| unsafe {
             let h_ui = CreateFontW(
                 height,
                 0,
@@ -194,7 +198,7 @@ pub(super) fn layout_controls(hwnd: HWND, dpi: u32) {
     let inner_w = w - pad * 2;
     let mut y = pad;
 
-    // 1. 状態表示 + 実行中断
+    // 1. 状態表示 + 実行中断 + プログレスバー
     let cancel_w = scale(140, dpi);
     let status_w = inner_w - cancel_w - gap;
     move_ctrl(hwnd, ID_LBL_STATUS, pad, y + scale(5, dpi), status_w, lbl_h);
@@ -206,7 +210,10 @@ pub(super) fn layout_controls(hwnd: HWND, dpi: u32) {
         cancel_w,
         row_h,
     );
-    y += row_h + gap + scale(4, dpi);
+    y += row_h + scale(4, dpi);
+    let prog_h = scale(8, dpi);
+    move_ctrl(hwnd, ID_PROGRESS_BAR, pad, y, inner_w, prog_h);
+    y += prog_h + gap;
 
     // 2. 基本修復 (2列)
     let half_w = (inner_w - gap) / 2;
@@ -370,6 +377,20 @@ pub(super) fn create_controls(hwnd: HWND, hinst: HINSTANCE) {
         0,
         ID_BTN_CANCEL,
     );
+    let h_prog = create_child(
+        hwnd,
+        hinst,
+        "msctls_progress32",
+        "",
+        PBS_MARQUEE,
+        0,
+        ID_PROGRESS_BAR,
+    );
+    if !h_prog.is_null() {
+        unsafe {
+            ShowWindow(h_prog, SW_HIDE);
+        }
+    }
 
     // 2. 基本修復
     create_child(
