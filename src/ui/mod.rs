@@ -675,7 +675,7 @@ pub fn run_app() -> i32 {
                         CW_USEDEFAULT,
                         CW_USEDEFAULT,
                         820,
-                        620,
+                        660,
                         std::ptr::null_mut(),
                         std::ptr::null_mut(),
                         hinst,

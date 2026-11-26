@@ -15,12 +15,15 @@ pub(super) const ID_BTN_CANCEL: usize = 102;
 pub(super) const ID_PROGRESS_BAR: usize = 103;
 
 // メンテナンス操作
+pub(super) const ID_LBL_SEC_BASIC: usize = 200;
 pub(super) const ID_BTN_DISM_ONLINE: usize = 201;
 pub(super) const ID_BTN_SFC: usize = 202;
+pub(super) const ID_LBL_SEC_NET: usize = 209;
 pub(super) const ID_BTN_NET_ALL: usize = 203;
 pub(super) const ID_BTN_NTP_RESYNC: usize = 204;
 pub(super) const ID_BTN_SYSINFO: usize = 205;
 
+pub(super) const ID_LBL_SEC_DISK: usize = 219;
 pub(super) const ID_LBL_CHKDSK_DRIVE: usize = 210;
 pub(super) const ID_CMB_CHKDSK_DRIVE: usize = 211;
 pub(super) const ID_BTN_CHKDSK: usize = 212;
@@ -41,7 +44,7 @@ pub(super) const ID_EDIT_LOG: usize = 304;
 
 pub(super) const LOG_SUBCLASS_ID: UINT_PTR = 1;
 pub(super) const MIN_CLIENT_WIDTH: i32 = 700;
-pub(super) const MIN_CLIENT_HEIGHT: i32 = 520;
+pub(super) const MIN_CLIENT_HEIGHT: i32 = 560;
 
 pub(super) const RUNNING_DISABLE_IDS: &[usize] = &[
     ID_BTN_DISM_ONLINE,
@@ -61,11 +64,14 @@ pub(super) const RUNNING_DISABLE_IDS: &[usize] = &[
 const UI_FONT_IDS: &[usize] = &[
     ID_LBL_STATUS,
     ID_BTN_CANCEL,
+    ID_LBL_SEC_BASIC,
     ID_BTN_DISM_ONLINE,
     ID_BTN_SFC,
+    ID_LBL_SEC_NET,
     ID_BTN_NET_ALL,
     ID_BTN_NTP_RESYNC,
     ID_BTN_SYSINFO,
+    ID_LBL_SEC_DISK,
     ID_LBL_CHKDSK_DRIVE,
     ID_CMB_CHKDSK_DRIVE,
     ID_BTN_CHKDSK,
@@ -216,6 +222,8 @@ pub(super) fn layout_controls(hwnd: HWND, dpi: u32) {
     y += prog_h + gap;
 
     // 2. 基本修復 (2列)
+    move_ctrl(hwnd, ID_LBL_SEC_BASIC, pad, y, inner_w, lbl_h);
+    y += lbl_h + scale(2, dpi);
     let half_w = (inner_w - gap) / 2;
     move_ctrl(hwnd, ID_BTN_DISM_ONLINE, pad, y, half_w, row_h);
     move_ctrl(
@@ -226,9 +234,11 @@ pub(super) fn layout_controls(hwnd: HWND, dpi: u32) {
         inner_w - half_w - gap,
         row_h,
     );
-    y += row_h + gap;
+    y += row_h + gap + scale(4, dpi);
 
     // 3. ネットワーク・時刻・システム情報 (3列)
+    move_ctrl(hwnd, ID_LBL_SEC_NET, pad, y, inner_w, lbl_h);
+    y += lbl_h + scale(2, dpi);
     let third_w = (inner_w - gap * 2) / 3;
     move_ctrl(hwnd, ID_BTN_NET_ALL, pad, y, third_w, row_h);
     move_ctrl(
@@ -250,6 +260,8 @@ pub(super) fn layout_controls(hwnd: HWND, dpi: u32) {
     y += row_h + gap + scale(4, dpi);
 
     // 4. CHKDSK
+    move_ctrl(hwnd, ID_LBL_SEC_DISK, pad, y, inner_w, lbl_h);
+    y += lbl_h + scale(2, dpi);
     let drv_lbl_w = scale(120, dpi);
     let drv_cmb_w = scale(80, dpi);
     let chkdsk_btn_w = inner_w - drv_lbl_w - drv_cmb_w - gap * 2;
@@ -396,6 +408,15 @@ pub(super) fn create_controls(hwnd: HWND, hinst: HINSTANCE) {
     create_child(
         hwnd,
         hinst,
+        "STATIC",
+        "1. 基本修復（推奨順: DISM → SFC）:",
+        0,
+        0,
+        ID_LBL_SEC_BASIC,
+    );
+    create_child(
+        hwnd,
+        hinst,
         "BUTTON",
         "DISM オンライン修復(&D)",
         WS_TABSTOP | BS_PUSHBUTTON,
@@ -413,6 +434,15 @@ pub(super) fn create_controls(hwnd: HWND, hinst: HINSTANCE) {
     );
 
     // 3. ネットワーク・時刻・システム情報
+    create_child(
+        hwnd,
+        hinst,
+        "STATIC",
+        "2. 通信・時刻・システム情報:",
+        0,
+        0,
+        ID_LBL_SEC_NET,
+    );
     create_child(
         hwnd,
         hinst,
@@ -442,6 +472,15 @@ pub(super) fn create_controls(hwnd: HWND, hinst: HINSTANCE) {
     );
 
     // 4. CHKDSK
+    create_child(
+        hwnd,
+        hinst,
+        "STATIC",
+        "3. ディスク・オフライン修復（必要時のみ）:",
+        0,
+        0,
+        ID_LBL_SEC_DISK,
+    );
     create_child(
         hwnd,
         hinst,
