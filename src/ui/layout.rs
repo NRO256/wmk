@@ -4,9 +4,9 @@ use crate::platform::win32::{
     CLIP_DEFAULT_PRECIS, CreateFontW, CreateWindowExW, DEFAULT_CHARSET, DEFAULT_PITCH,
     EM_SETLIMITTEXT, ES_AUTOHSCROLL, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY,
     FIXED_PITCH, FW_NORMAL, GetClientRect, GetDlgItem, HFONT, HINSTANCE, HMENU, HWND, LPARAM,
-    MoveWindow, OUT_DEFAULT_PRECIS, PBS_MARQUEE, RECT, SW_HIDE, SendMessageW, SetWindowSubclass,
-    ShowWindow, TRUE, UINT_PTR, WM_SETFONT, WPARAM, WS_BORDER, WS_CHILD, WS_EX_CLIENTEDGE,
-    WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL, with_wide,
+    MoveWindow, OUT_DEFAULT_PRECIS, PBM_SETPOS, PBM_SETRANGE32, RECT, SW_HIDE, SendMessageW,
+    SetWindowSubclass, ShowWindow, TRUE, UINT_PTR, WM_SETFONT, WPARAM, WS_BORDER, WS_CHILD,
+    WS_EX_CLIENTEDGE, WS_HSCROLL, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL, with_wide,
 };
 
 // 共通・上部バー
@@ -393,13 +393,15 @@ pub(super) fn create_controls(hwnd: HWND, hinst: HINSTANCE) {
         hwnd,
         hinst,
         "msctls_progress32",
-        "",
-        PBS_MARQUEE,
+        "進行状況",
+        0,
         0,
         ID_PROGRESS_BAR,
     );
     if !h_prog.is_null() {
         unsafe {
+            SendMessageW(h_prog, PBM_SETRANGE32, 0, 100);
+            SendMessageW(h_prog, PBM_SETPOS, 0, 0);
             ShowWindow(h_prog, SW_HIDE);
         }
     }

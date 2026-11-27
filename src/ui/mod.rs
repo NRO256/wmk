@@ -4,6 +4,7 @@ pub mod state;
 pub mod uia_notify;
 
 use crate::domain::commands::{MaintenanceAction, build_command_steps, describe_exit_code};
+use crate::domain::progress::{extract_progress_percent, supports_determinate_progress};
 use crate::domain::source_detect::detect_portable_image_in_dir;
 use crate::platform::io::{get_exe_directory, save_text_utf8};
 use crate::platform::process::{WM_APP_WORKER_EVENT, WorkerEvent, spawn_command_sequence};
@@ -16,12 +17,13 @@ use crate::platform::win32::{
     GetWindowTextLengthW, HBRUSH, HWND, ICC_PROGRESS_CLASS, ICC_STANDARD_CLASSES, IDC_ARROW,
     IDI_APPLICATION, IDI_SHIELD, INITCOMMONCONTROLSEX, InitCommonControlsEx, InvalidateRect,
     IsDialogMessageW, IsWindowEnabled, KillTimer, LPARAM, LRESULT, LoadCursorW, LoadIconW,
-    MINMAXINFO, MSG, MoveWindow, PBM_SETMARQUEE, PostQuitMessage, RECT, RegisterClassExW,
-    RemoveWindowSubclass, SW_HIDE, SW_SHOW, SendMessageW, SetFocus, SetTimer, ShowWindow, TRUE,
-    TranslateMessage, UINT, UINT_PTR, UpdateWindow, VK_CONTROL, VK_ESCAPE, WM_CHAR, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_GETDLGCODE, WM_GETMINMAXINFO, WM_KEYDOWN,
-    WM_NCDESTROY, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW, WPARAM, WS_OVERLAPPEDWINDOW,
-    format_local_time_hms, get_window_text, make_int_resource_w, set_window_text, with_wide,
+    MINMAXINFO, MSG, MoveWindow, PBM_SETPOS, PBM_SETRANGE32, PostQuitMessage, RECT,
+    RegisterClassExW, RemoveWindowSubclass, SW_HIDE, SW_SHOW, SendMessageW, SetFocus, SetTimer,
+    ShowWindow, TRUE, TranslateMessage, UINT, UINT_PTR, UpdateWindow, VK_CONTROL, VK_ESCAPE,
+    WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_GETDLGCODE,
+    WM_GETMINMAXINFO, WM_KEYDOWN, WM_NCDESTROY, WM_SETREDRAW, WM_SIZE, WM_TIMER, WNDCLASSEXW,
+    WPARAM, WS_OVERLAPPEDWINDOW, format_local_time_hms, get_window_text, make_int_resource_w,
+    set_window_text, with_wide,
 };
 use crate::ui::dialogs::{
     browse_folder, confirm_yes_no, open_image_file, save_log_file, show_error, show_info,
@@ -50,6 +52,14 @@ fn append_log_timestamped(hwnd: HWND, line: &str) {
 
 fn format_elapsed_mm_ss(secs: u64) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+fn format_status_running(title: &str, progress: Option<u8>, secs: u64) -> String {
+    let elapsed = format_elapsed_mm_ss(secs);
+    match progress {
+        Some(pct) => format!("状態: 実行中 ({title}) {pct}% [{elapsed}]"),
+        None => format!("状態: 実行中 ({title}) [{elapsed}]"),
+    }
 }
 
 thread_local! {
@@ -188,7 +198,7 @@ fn append_log_line(hwnd: HWND, line: &str) {
     });
 }
 
-fn set_running_ui_state(hwnd: HWND, running: bool, status_text: &str) {
+fn set_running_ui_state(hwnd: HWND, running: bool, show_progress_bar: bool, status_text: &str) {
     let h_status = ctrl(hwnd, ID_LBL_STATUS);
     if !h_status.is_null() {
         set_window_text(h_status, status_text);
@@ -198,11 +208,12 @@ fn set_running_ui_state(hwnd: HWND, running: bool, status_text: &str) {
     let h_cancel = ctrl(hwnd, ID_BTN_CANCEL);
     unsafe {
         if !h_prog.is_null() {
-            if running {
+            if running && show_progress_bar {
+                SendMessageW(h_prog, PBM_SETRANGE32, 0, 100);
+                SendMessageW(h_prog, PBM_SETPOS, 0, 0);
                 ShowWindow(h_prog, SW_SHOW);
-                SendMessageW(h_prog, PBM_SETMARQUEE, 1, 30);
             } else {
-                SendMessageW(h_prog, PBM_SETMARQUEE, 0, 0);
+                SendMessageW(h_prog, PBM_SETPOS, 0, 0);
                 ShowWindow(h_prog, SW_HIDE);
             }
         }
@@ -272,12 +283,22 @@ fn start_action(hwnd: HWND, action: MaintenanceAction) {
     }
 
     let title = action.title().to_string();
+    let show_progress = supports_determinate_progress(&action);
+    let initial_pct = if show_progress { Some(0) } else { None };
     append_log_timestamped(hwnd, &format!("=== {title} 開始 ==="));
     with_state_mut(|s| {
         s.running_action = Some(action);
         s.started_at = Some(Instant::now());
+        s.determinate_progress = show_progress;
+        s.progress_percent = initial_pct;
+        s.last_announced_decade = None;
     });
-    set_running_ui_state(hwnd, true, &format!("状態: 実行中 ({title}) [00:00]"));
+    set_running_ui_state(
+        hwnd,
+        true,
+        show_progress,
+        &format_status_running(&title, initial_pct, 0),
+    );
     unsafe {
         SetTimer(hwnd, TIMER_ELAPSED_ID, 1000, std::ptr::null());
     }
@@ -312,6 +333,42 @@ fn process_worker_events(hwnd: HWND) {
         match ev {
             WorkerEvent::LogLine(line) => {
                 append_log_line(hwnd, &line);
+                let progress_update = with_state_mut(|s| {
+                    if !s.determinate_progress {
+                        return None;
+                    }
+                    let act = s.running_action.as_ref()?;
+                    let pct = extract_progress_percent(act, &line)?;
+                    if s.progress_percent == Some(pct) {
+                        return None;
+                    }
+                    s.progress_percent = Some(pct);
+                    let decade = pct / 10;
+                    let should_announce =
+                        (1..=9).contains(&decade) && s.last_announced_decade != Some(decade);
+                    if should_announce {
+                        s.last_announced_decade = Some(decade);
+                    }
+                    let secs = s.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                    Some((act.title(), pct, secs, should_announce))
+                })
+                .flatten();
+
+                if let Some((title, pct, secs, should_announce)) = progress_update {
+                    let h_prog = ctrl(hwnd, ID_PROGRESS_BAR);
+                    if !h_prog.is_null() {
+                        unsafe {
+                            SendMessageW(h_prog, PBM_SETPOS, pct as WPARAM, 0);
+                        }
+                    }
+                    let h_status = ctrl(hwnd, ID_LBL_STATUS);
+                    if !h_status.is_null() {
+                        set_window_text(h_status, &format_status_running(title, Some(pct), secs));
+                    }
+                    if should_announce {
+                        announce_uia_notification(hwnd, &format!("{title} {pct}%"));
+                    }
+                }
             }
             WorkerEvent::Finished {
                 cancelled,
@@ -322,6 +379,9 @@ fn process_worker_events(hwnd: HWND) {
                 }
                 let (finished_action, elapsed_str) = with_state_mut(|s| {
                     s.worker = None;
+                    s.determinate_progress = false;
+                    s.progress_percent = None;
+                    s.last_announced_decade = None;
                     let act = s.running_action.take();
                     let el = s
                         .started_at
@@ -354,7 +414,7 @@ fn process_worker_events(hwnd: HWND) {
                 } else {
                     None
                 };
-                set_running_ui_state(hwnd, false, "状態: 待機中");
+                set_running_ui_state(hwnd, false, false, "状態: 待機中");
                 let uia_msg = if cancelled {
                     "処理を中断しました。".to_string()
                 } else if let Some(desc) = guidance {
@@ -372,9 +432,12 @@ fn process_worker_events(hwnd: HWND) {
                     s.worker = None;
                     s.running_action = None;
                     s.started_at = None;
+                    s.determinate_progress = false;
+                    s.progress_percent = None;
+                    s.last_announced_decade = None;
                 });
                 append_log_timestamped(hwnd, &format!("[エラー] {err}"));
-                set_running_ui_state(hwnd, false, "状態: エラー終了");
+                set_running_ui_state(hwnd, false, false, "状態: エラー終了");
                 announce_uia_notification(hwnd, &format!("エラーが発生しました: {err}"));
                 show_error(hwnd, "実行エラー", &err);
             }
@@ -487,7 +550,7 @@ unsafe extern "system" fn wnd_proc(
             });
 
             apply_fonts(hwnd, hfont_ui, hfont_mono);
-            set_running_ui_state(hwnd, false, "状態: 待機中");
+            set_running_ui_state(hwnd, false, false, "状態: 待機中");
             layout_controls(hwnd, dpi);
 
             if let Some(exe_dir) = get_exe_directory()
@@ -578,17 +641,17 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_TIMER => {
             if wparam == TIMER_ELAPSED_ID
-                && let Some((title, secs)) = with_state(|s| {
+                && let Some((title, progress, secs)) = with_state(|s| {
                     s.running_action
                         .as_ref()
                         .zip(s.started_at)
-                        .map(|(act, st)| (act.title(), st.elapsed().as_secs()))
+                        .map(|(act, st)| (act.title(), s.progress_percent, st.elapsed().as_secs()))
                 })
                 .flatten()
             {
                 let h_status = ctrl(hwnd, ID_LBL_STATUS);
                 if !h_status.is_null() {
-                    let text = format!("状態: 実行中 ({title}) [{}]", format_elapsed_mm_ss(secs));
+                    let text = format_status_running(title, progress, secs);
                     set_window_text(h_status, &text);
                 }
             }
@@ -618,6 +681,9 @@ unsafe extern "system" fn wnd_proc(
                 s.worker.take();
                 s.running_action = None;
                 s.started_at = None;
+                s.determinate_progress = false;
+                s.progress_percent = None;
+                s.last_announced_decade = None;
                 s.release_fonts();
             });
             unsafe {

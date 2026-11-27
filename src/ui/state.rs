@@ -18,6 +18,9 @@ pub struct AppState {
     pub current_dpi: u32,
     pub running_action: Option<MaintenanceAction>,
     pub started_at: Option<Instant>,
+    pub determinate_progress: bool,
+    pub progress_percent: Option<u8>,
+    pub last_announced_decade: Option<u8>,
 }
 
 impl AppState {
@@ -33,6 +36,9 @@ impl AppState {
             current_dpi: 96,
             running_action: None,
             started_at: None,
+            determinate_progress: false,
+            progress_percent: None,
+            last_announced_decade: None,
         }
     }
 
