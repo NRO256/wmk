@@ -35,41 +35,80 @@ pub fn validate_safe_path_chars(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `WIM:` / `ESD:` プレフィックスおよび末尾の `:数字` インデックス指定を取り除く。
+fn strip_image_prefix_and_index(
+    trimmed: &str,
+) -> Result<(&'static str, &str, Option<u32>), String> {
+    let upper = trimmed.to_ascii_uppercase();
+    let prefix = if upper.starts_with("WIM:") {
+        "WIM:"
+    } else if upper.starts_with("ESD:") {
+        "ESD:"
+    } else {
+        return Ok(("", trimmed, None));
+    };
+
+    let rest = &trimmed[4..];
+    if rest.is_empty() {
+        return Err("イメージファイルのパスが指定されていません。".to_string());
+    }
+
+    if let Some(colon_pos) = rest.rfind(':') {
+        let rest_bytes = rest.as_bytes();
+        let is_drive_colon = colon_pos == 1
+            && rest_bytes[0].is_ascii_alphabetic()
+            && matches!(rest_bytes.get(2), Some(b'\\') | Some(b'/'));
+        let suffix = &rest[colon_pos + 1..];
+        if !is_drive_colon
+            && colon_pos > 0
+            && !suffix.is_empty()
+            && suffix.chars().all(|c| c.is_ascii_digit())
+        {
+            let parsed: u32 = suffix.parse().unwrap_or(0);
+            return Ok((prefix, &rest[..colon_pos], Some(parsed)));
+        }
+    }
+
+    Ok((prefix, rest, None))
+}
+
+/// DISM `/Get-ImageInfo /ImageFile:<パス>` に渡す実イメージファイルパスを解決・検証する。
+pub fn resolve_image_file_path(raw_input: &str) -> Result<String, String> {
+    let trimmed = raw_input.trim().trim_matches('"');
+    validate_safe_path_chars(trimmed)?;
+
+    let (_, stripped, _) = strip_image_prefix_and_index(trimmed)?;
+    let normalized = trim_trailing_backslash(stripped);
+    let lower = normalized.to_ascii_lowercase();
+    let path = Path::new(&normalized);
+
+    if (lower.ends_with(".wim") || lower.ends_with(".esd")) && !path.is_dir() {
+        return Ok(normalized);
+    }
+
+    if let Some(found) = detect_portable_image_in_dir(path) {
+        return Ok(found.to_string_lossy().into_owned());
+    }
+
+    Err(format!(
+        "指定された場所から install.wim または install.esd が見つかりません: {normalized}"
+    ))
+}
+
 /// DISM `/Source:` に渡す値（フォルダ、または `WIM:<path>:<idx>` / `ESD:<path>:<idx>`）を構築・検証する。
 pub fn format_dism_source_value(raw_input: &str, index: u32) -> Result<String, String> {
     let trimmed = raw_input.trim().trim_matches('"');
     validate_safe_path_chars(trimmed)?;
 
     let idx = if index == 0 { 1 } else { index };
-    let upper = trimmed.to_ascii_uppercase();
-
-    if upper.starts_with("WIM:") || upper.starts_with("ESD:") {
-        let prefix = &upper[..4];
-        let rest = &trimmed[4..];
-        if rest.is_empty() {
-            return Err("イメージファイルのパスが指定されていません。".to_string());
-        }
-        // 末尾に `:数字` が既に付いているか確認
-        if let Some(colon_pos) = rest.rfind(':') {
-            let rest_bytes = rest.as_bytes();
-            let is_drive_colon = colon_pos == 1
-                && rest_bytes[0].is_ascii_alphabetic()
-                && matches!(rest_bytes.get(2), Some(b'\\') | Some(b'/'));
-            let suffix = &rest[colon_pos + 1..];
-            if !is_drive_colon
-                && colon_pos > 0
-                && !suffix.is_empty()
-                && suffix.chars().all(|c| c.is_ascii_digit())
-            {
-                let parsed: u32 = suffix.parse().unwrap_or(0);
-                if parsed == 0 {
-                    let path_part = &rest[..colon_pos];
-                    return Ok(format!("{prefix}{path_part}:1"));
-                }
-                return Ok(format!("{prefix}{rest}"));
-            }
-        }
-        return Ok(format!("{prefix}{rest}:{idx}"));
+    let (prefix, stripped, explicit_idx) = strip_image_prefix_and_index(trimmed)?;
+    if !prefix.is_empty() {
+        let final_idx = match explicit_idx {
+            Some(0) => 1,
+            Some(n) => n,
+            None => idx,
+        };
+        return Ok(format!("{prefix}{stripped}:{final_idx}"));
     }
 
     let normalized = trim_trailing_backslash(trimmed);
@@ -155,6 +194,32 @@ mod tests {
         let root_wim = base.join("install.wim");
         std::fs::write(&root_wim, b"dummy").unwrap();
         assert_eq!(detect_portable_image_in_dir(&base), Some(root_wim));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn test_resolve_image_file_path() {
+        assert_eq!(
+            resolve_image_file_path(r"WIM:E:\sources\install.wim:2").unwrap(),
+            r"E:\sources\install.wim"
+        );
+        assert_eq!(
+            resolve_image_file_path(r"esd:D:\Images\install.esd").unwrap(),
+            r"D:\Images\install.esd"
+        );
+        assert!(resolve_image_file_path("").is_err());
+        assert!(resolve_image_file_path(r#"C:\bad"path\install.wim"#).is_err());
+
+        let base = std::env::temp_dir().join(format!("wmk_resolve_test_{}", std::process::id()));
+        let sources = base.join("sources");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&sources).unwrap();
+        let img = sources.join("install.esd");
+        std::fs::write(&img, b"dummy").unwrap();
+
+        let resolved = resolve_image_file_path(&base.to_string_lossy()).unwrap();
+        assert_eq!(PathBuf::from(resolved), img);
 
         let _ = std::fs::remove_dir_all(&base);
     }

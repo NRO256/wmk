@@ -1,13 +1,13 @@
 use crate::platform::win32::{
-    DRIVE_FIXED, DRIVE_REMOVABLE, GetDriveTypeW, GetLogicalDriveStringsW,
+    DRIVE_CDROM, DRIVE_FIXED, DRIVE_REMOVABLE, GetDriveTypeW, GetLogicalDriveStringsW, UINT,
 };
+use std::path::PathBuf;
 
-/// 利用可能な固定ドライブ・リムーバブルドライブの一覧（例: `["C:", "D:"]`）を返す。
-pub fn list_available_drives() -> Vec<String> {
+fn list_drives_by_types(allowed_types: &[UINT]) -> Vec<String> {
     let mut buf = [0u16; 512];
     let len = unsafe { GetLogicalDriveStringsW(buf.len() as u32, buf.as_mut_ptr()) };
     if len == 0 || (len as usize) >= buf.len() {
-        return vec!["C:".to_string()];
+        return Vec::new();
     }
 
     let mut drives = Vec::new();
@@ -25,13 +25,34 @@ pub fn list_available_drives() -> Vec<String> {
         }
         let root_w = [letter as u16, b':' as u16, b'\\' as u16, 0];
         let dtype = unsafe { GetDriveTypeW(root_w.as_ptr()) };
-        if dtype == DRIVE_FIXED || dtype == DRIVE_REMOVABLE {
+        if allowed_types.contains(&dtype) {
             drives.push(format!("{letter}:"));
         }
     }
 
+    drives
+}
+
+/// 利用可能な固定ドライブ・リムーバブルドライブの一覧（例: `["C:", "D:"]`）を返す。
+pub fn list_available_drives() -> Vec<String> {
+    let mut drives = list_drives_by_types(&[DRIVE_FIXED, DRIVE_REMOVABLE]);
     if drives.is_empty() {
         drives.push("C:".to_string());
     }
     drives
+}
+
+/// マウント済み光学ドライブ（`DRIVE_CDROM`）から `sources\install.wim` または `sources\install.esd` を探索する。
+pub fn find_mounted_iso_image() -> Option<PathBuf> {
+    for drive in list_drives_by_types(&[DRIVE_CDROM]) {
+        let wim = PathBuf::from(format!("{drive}\\sources\\install.wim"));
+        if wim.is_file() {
+            return Some(wim);
+        }
+        let esd = PathBuf::from(format!("{drive}\\sources\\install.esd"));
+        if esd.is_file() {
+            return Some(esd);
+        }
+    }
+    None
 }

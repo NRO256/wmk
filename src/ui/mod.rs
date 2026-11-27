@@ -4,8 +4,10 @@ pub mod state;
 pub mod uia_notify;
 
 use crate::domain::commands::{MaintenanceAction, build_command_steps, describe_exit_code};
+use crate::domain::image_info::parse_dism_image_info;
 use crate::domain::progress::{extract_progress_percent, supports_determinate_progress};
 use crate::domain::source_detect::detect_portable_image_in_dir;
+use crate::platform::drive::find_mounted_iso_image;
 use crate::platform::io::{get_exe_directory, save_text_utf8};
 use crate::platform::process::{WM_APP_WORKER_EVENT, WorkerEvent, spawn_command_sequence};
 use crate::platform::win32::{
@@ -29,7 +31,7 @@ use crate::ui::dialogs::{
     browse_folder, confirm_yes_no, open_image_file, save_log_file, show_error, show_info,
 };
 use crate::ui::layout::{
-    ID_BTN_CANCEL, ID_BTN_CHKDSK, ID_BTN_DISM_BROWSE_DIR, ID_BTN_DISM_BROWSE_IMG,
+    ID_BTN_CANCEL, ID_BTN_CHKDSK, ID_BTN_DISM_BROWSE_DIR, ID_BTN_DISM_BROWSE_IMG, ID_BTN_DISM_INFO,
     ID_BTN_DISM_ONLINE, ID_BTN_DISM_SOURCE, ID_BTN_LOG_CLEAR, ID_BTN_LOG_SAVE, ID_BTN_NET_ALL,
     ID_BTN_NTP_RESYNC, ID_BTN_SFC, ID_BTN_SYSINFO, ID_CMB_CHKDSK_DRIVE, ID_CMB_DISM_INDEX,
     ID_EDIT_DISM_SOURCE, ID_EDIT_LOG, ID_LBL_STATUS, ID_PROGRESS_BAR, MIN_CLIENT_HEIGHT,
@@ -292,6 +294,7 @@ fn start_action(hwnd: HWND, action: MaintenanceAction) {
         s.determinate_progress = show_progress;
         s.progress_percent = initial_pct;
         s.last_announced_decade = None;
+        s.collected_log_lines.clear();
     });
     set_running_ui_state(
         hwnd,
@@ -334,6 +337,13 @@ fn process_worker_events(hwnd: HWND) {
             WorkerEvent::LogLine(line) => {
                 append_log_line(hwnd, &line);
                 let progress_update = with_state_mut(|s| {
+                    if matches!(
+                        s.running_action,
+                        Some(MaintenanceAction::DismImageInfo { .. })
+                    ) && s.collected_log_lines.len() < 1000
+                    {
+                        s.collected_log_lines.push(line.clone());
+                    }
                     if !s.determinate_progress {
                         return None;
                     }
@@ -377,7 +387,7 @@ fn process_worker_events(hwnd: HWND) {
                 unsafe {
                     KillTimer(hwnd, TIMER_ELAPSED_ID);
                 }
-                let (finished_action, elapsed_str) = with_state_mut(|s| {
+                let (finished_action, elapsed_str, collected_lines) = with_state_mut(|s| {
                     s.worker = None;
                     s.determinate_progress = false;
                     s.progress_percent = None;
@@ -387,9 +397,10 @@ fn process_worker_events(hwnd: HWND) {
                         .started_at
                         .take()
                         .map(|t| format_elapsed_mm_ss(t.elapsed().as_secs()));
-                    (act, el)
+                    let lines = std::mem::take(&mut s.collected_log_lines);
+                    (act, el, lines)
                 })
-                .unwrap_or((None, None));
+                .unwrap_or((None, None, Vec::new()));
                 let msg = if cancelled {
                     "=== ユーザーにより中断されました ===".to_string()
                 } else if let Some(code) = last_exit_code {
@@ -404,6 +415,19 @@ fn process_worker_events(hwnd: HWND) {
                     "=== 完了 ===".to_string()
                 };
                 append_log_timestamped(hwnd, &msg);
+                let image_summary = if !cancelled
+                    && last_exit_code == Some(0)
+                    && matches!(
+                        finished_action,
+                        Some(MaintenanceAction::DismImageInfo { .. })
+                    ) {
+                    parse_dism_image_info(&collected_lines).format_summary()
+                } else {
+                    None
+                };
+                if let Some(ref summary) = image_summary {
+                    append_log_line(hwnd, &format!("[要約] {summary}"));
+                }
                 let guidance = if !cancelled
                     && let Some(code) = last_exit_code
                     && let Some(ref act) = finished_action
@@ -417,6 +441,8 @@ fn process_worker_events(hwnd: HWND) {
                 set_running_ui_state(hwnd, false, false, "状態: 待機中");
                 let uia_msg = if cancelled {
                     "処理を中断しました。".to_string()
+                } else if let Some(summary) = image_summary {
+                    format!("イメージ情報を取得しました。{summary}")
                 } else if let Some(desc) = guidance {
                     format!("処理が完了しました。{desc}")
                 } else {
@@ -435,6 +461,7 @@ fn process_worker_events(hwnd: HWND) {
                     s.determinate_progress = false;
                     s.progress_percent = None;
                     s.last_announced_decade = None;
+                    s.collected_log_lines.clear();
                 });
                 append_log_timestamped(hwnd, &format!("[エラー] {err}"));
                 set_running_ui_state(hwnd, false, false, "状態: エラー終了");
@@ -512,6 +539,36 @@ fn handle_command(hwnd: HWND, id: usize, code: u16) {
             if let Some(path) = open_image_file(hwnd) {
                 set_window_text(ctrl(hwnd, ID_EDIT_DISM_SOURCE), &path.to_string_lossy());
             }
+        }
+        ID_BTN_DISM_INFO => {
+            let mut src = get_window_text(ctrl(hwnd, ID_EDIT_DISM_SOURCE));
+            if src.trim().is_empty() {
+                if let Some(iso_path) = find_mounted_iso_image() {
+                    let path_str = iso_path.to_string_lossy().into_owned();
+                    set_window_text(ctrl(hwnd, ID_EDIT_DISM_SOURCE), &path_str);
+                    append_log_line(
+                        hwnd,
+                        &format!("[情報] マウント済み ISO イメージを検出しました: {path_str}"),
+                    );
+                    src = path_str;
+                } else {
+                    show_error(
+                        hwnd,
+                        "入力エラー",
+                        "修復ソースが指定されておらず、マウント済み ISO イメージも見つかりませんでした。\nフォルダまたは WIM/ESD ファイルを指定してください。",
+                    );
+                    return;
+                }
+            }
+            let idx_str = get_selected_combo_text(hwnd, ID_CMB_DISM_INDEX, "1");
+            let idx: u32 = idx_str.trim().parse().unwrap_or(1);
+            start_action(
+                hwnd,
+                MaintenanceAction::DismImageInfo {
+                    source: src,
+                    index: idx,
+                },
+            );
         }
         ID_BTN_DISM_SOURCE => {
             let src = get_window_text(ctrl(hwnd, ID_EDIT_DISM_SOURCE));
@@ -684,6 +741,7 @@ unsafe extern "system" fn wnd_proc(
                 s.determinate_progress = false;
                 s.progress_percent = None;
                 s.last_announced_decade = None;
+                s.collected_log_lines.clear();
                 s.release_fonts();
             });
             unsafe {

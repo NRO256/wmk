@@ -35,6 +35,7 @@ pub(super) const ID_BTN_DISM_BROWSE_IMG: usize = 223;
 pub(super) const ID_LBL_DISM_INDEX: usize = 224;
 pub(super) const ID_CMB_DISM_INDEX: usize = 225;
 pub(super) const ID_BTN_DISM_SOURCE: usize = 226;
+pub(super) const ID_BTN_DISM_INFO: usize = 227;
 
 // ログ領域
 pub(super) const ID_LBL_LOG: usize = 301;
@@ -58,6 +59,7 @@ pub(super) const RUNNING_DISABLE_IDS: &[usize] = &[
     ID_BTN_DISM_BROWSE_DIR,
     ID_BTN_DISM_BROWSE_IMG,
     ID_CMB_DISM_INDEX,
+    ID_BTN_DISM_INFO,
     ID_BTN_DISM_SOURCE,
 ];
 
@@ -81,6 +83,7 @@ const UI_FONT_IDS: &[usize] = &[
     ID_BTN_DISM_BROWSE_IMG,
     ID_LBL_DISM_INDEX,
     ID_CMB_DISM_INDEX,
+    ID_BTN_DISM_INFO,
     ID_BTN_DISM_SOURCE,
     ID_LBL_LOG,
     ID_BTN_LOG_CLEAR,
@@ -318,7 +321,8 @@ pub(super) fn layout_controls(hwnd: HWND, dpi: u32) {
 
     let idx_lbl_w = scale(85, dpi);
     let idx_cmb_w = scale(60, dpi);
-    let run_src_w = inner_w - idx_lbl_w - idx_cmb_w - gap * 2;
+    let info_btn_w = scale(170, dpi);
+    let run_src_w = inner_w - idx_lbl_w - idx_cmb_w - info_btn_w - gap * 3;
     move_ctrl(
         hwnd,
         ID_LBL_DISM_INDEX,
@@ -337,8 +341,16 @@ pub(super) fn layout_controls(hwnd: HWND, dpi: u32) {
     );
     move_ctrl(
         hwnd,
-        ID_BTN_DISM_SOURCE,
+        ID_BTN_DISM_INFO,
         pad + idx_lbl_w + idx_cmb_w + gap * 2,
+        y,
+        info_btn_w,
+        row_h,
+    );
+    move_ctrl(
+        hwnd,
+        ID_BTN_DISM_SOURCE,
+        pad + idx_lbl_w + idx_cmb_w + info_btn_w + gap * 3,
         y,
         run_src_w,
         row_h,
@@ -582,6 +594,15 @@ pub(super) fn create_controls(hwnd: HWND, hinst: HINSTANCE) {
     unsafe {
         SendMessageW(h_cmb_idx, CB_SETCURSEL, 0, 0);
     }
+    create_child(
+        hwnd,
+        hinst,
+        "BUTTON",
+        "イメージ情報取得(&I)",
+        WS_TABSTOP | BS_PUSHBUTTON,
+        0,
+        ID_BTN_DISM_INFO,
+    );
     create_child(
         hwnd,
         hinst,

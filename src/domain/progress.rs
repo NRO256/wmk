@@ -20,7 +20,8 @@ pub fn extract_progress_percent(action: &MaintenanceAction, line: &str) -> Optio
         MaintenanceAction::ChkdskRepair { .. } => parse_chkdsk_progress(line),
         MaintenanceAction::NtpResync
         | MaintenanceAction::SystemInfo
-        | MaintenanceAction::NetFullRepair => None,
+        | MaintenanceAction::NetFullRepair
+        | MaintenanceAction::DismImageInfo { .. } => None,
     }
 }
 

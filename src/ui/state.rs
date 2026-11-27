@@ -21,6 +21,7 @@ pub struct AppState {
     pub determinate_progress: bool,
     pub progress_percent: Option<u8>,
     pub last_announced_decade: Option<u8>,
+    pub collected_log_lines: Vec<String>,
 }
 
 impl AppState {
@@ -39,6 +40,7 @@ impl AppState {
             determinate_progress: false,
             progress_percent: None,
             last_announced_decade: None,
+            collected_log_lines: Vec::new(),
         }
     }
 

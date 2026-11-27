@@ -1,9 +1,10 @@
-use crate::domain::source_detect::format_dism_source_value;
+use crate::domain::source_detect::{format_dism_source_value, resolve_image_file_path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaintenanceAction {
     DismRestoreHealth,
     DismRestoreHealthWithSource { source: String, index: u32 },
+    DismImageInfo { source: String, index: u32 },
     SfcScannow,
     ChkdskRepair { drive: String },
     NtpResync,
@@ -24,6 +25,7 @@ impl MaintenanceAction {
         match self {
             Self::DismRestoreHealth => "DISM イメージ修復 (オンライン)",
             Self::DismRestoreHealthWithSource { .. } => "DISM イメージ修復 (修復ソース指定)",
+            Self::DismImageInfo { .. } => "DISM イメージ情報取得",
             Self::SfcScannow => "システムファイルチェッカー (sfc /scannow)",
             Self::ChkdskRepair { .. } => "ディスクチェックと修復 (chkdsk /r)",
             Self::NtpResync => "NTP 時刻同期 (w32tm /resync)",
@@ -96,6 +98,22 @@ pub fn build_command_steps(action: &MaintenanceAction) -> Result<Vec<CommandStep
                 display_label: format!(
                     "DISM.exe /Online /Cleanup-Image /RestoreHealth {source_arg} /LimitAccess"
                 ),
+            }])
+        }
+        MaintenanceAction::DismImageInfo { source, index } => {
+            let image_path = resolve_image_file_path(source)?;
+            let idx = if *index == 0 { 1 } else { *index };
+            let image_arg = format!("/ImageFile:{image_path}");
+            let index_arg = format!("/Index:{idx}");
+            Ok(vec![CommandStep {
+                exe_name: "dism.exe",
+                args: vec![
+                    "/Get-ImageInfo".to_string(),
+                    image_arg.clone(),
+                    index_arg.clone(),
+                ],
+                stdin_response: None,
+                display_label: format!("DISM.exe /Get-ImageInfo {image_arg} {index_arg}"),
             }])
         }
         MaintenanceAction::SfcScannow => Ok(vec![CommandStep {
@@ -257,5 +275,24 @@ mod tests {
         trim_log_buffer(&mut buf, 14);
         assert!(buf.len() <= 14);
         assert_eq!(buf, "67890\r\n");
+    }
+
+    #[test]
+    fn test_dism_image_info_command_steps() {
+        let action = MaintenanceAction::DismImageInfo {
+            source: r"WIM:E:\sources\install.wim:2".to_string(),
+            index: 1,
+        };
+        let steps = build_command_steps(&action).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].exe_name, "dism.exe");
+        assert_eq!(
+            steps[0].args,
+            vec![
+                "/Get-ImageInfo",
+                r"/ImageFile:E:\sources\install.wim",
+                "/Index:1",
+            ]
+        );
     }
 }
