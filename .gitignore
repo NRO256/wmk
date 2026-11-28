@@ -9,3 +9,5 @@ credentials.json
 *.pdb
 *.bak
 /docs/
+
+x_post.txt

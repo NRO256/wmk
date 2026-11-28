@@ -35,10 +35,10 @@ jobs:
           Copy-Item README.md WMK/
           Copy-Item README.txt WMK/
           Copy-Item LICENSE WMK/
-          Compress-Archive -Path WMK -DestinationPath "WMK-${{ github.ref_name }}-win.zip"
+          Compress-Archive -Path WMK -DestinationPath "WMK-${{ github.ref_name }}-win-x64.zip"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: WMK-${{ github.ref_name }}-win.zip
+          files: WMK-${{ github.ref_name }}-win-x64.zip
           generate_release_notes: true
